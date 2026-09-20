@@ -14,12 +14,13 @@ const GRAB_R = 110;
 const needlePos = (t) => ({ x: P.x + L * Math.cos(A0 - t), y: P.y + L * Math.sin(A0 - t) });
 const onRecordAt = (t) => {
   const n = needlePos(t), r = Math.hypot(n.x - C.x, n.y - C.y);
-  return r > R * 0.34 && r < R * 0.95;
+  return r < R * 0.95;                            // 라벨 위(중심부)까지 포함
 };
-const R_OUT = R * 0.95, R_IN = R * 0.34;       // 바깥(곡 시작) ~ 안쪽(곡 끝)
-const progressAt = (t) => {
-  const n = needlePos(t);
-  return clamp((R_OUT - Math.hypot(n.x - C.x, n.y - C.y)) / (R_OUT - R_IN), 0, 1);
+const R_OUT = R * 0.95, R_IN = R * 0.42;       // R_IN 안쪽(중심부) = 처음부터, 바깥쪽 구간 = 위치 비례
+const inStartZone = (t) => { const n = needlePos(t); return Math.hypot(n.x - C.x, n.y - C.y) < R_IN; };
+const progressAt = (t) => {                       // 중심부에서는 0 (처음부터)
+  const n = needlePos(t), r = Math.hypot(n.x - C.x, n.y - C.y);
+  return r < R_IN ? 0 : clamp((R_OUT - r) / (R_OUT - R_IN), 0, 0.98);
 };
 const thetaForProgress = (p) => {
   const r = R_OUT - p * (R_OUT - R_IN);
@@ -148,12 +149,12 @@ function startPlayback(p) {
   if (!current) selectSong(songs[0]);
   if (!ytReady) { setStatus("플레이어 로딩 중… 잠시 후 다시 올려주세요."); onRecord = false; return; }
   const dur = getDur(), same = player.getVideoData().video_id === current.id;
-  if (same && dur > 0) {
-    player.seekTo(Math.min(p * dur, dur - 2), true); lastSeekAt = performance.now(); pendingSeek = null;
+  if (same && (dur > 0 || p === 0)) {
+    player.seekTo(p === 0 ? 0 : Math.min(p * dur, dur - 2), true); lastSeekAt = performance.now(); pendingSeek = null;
     player.playVideo();
-    setStatus(`♪ ${fmt(p * dur)} 부터 재생 — 핀을 집어 올리면 멈춰요.`);
+    setStatus(p === 0 ? "♪ 처음부터 재생 — 핀을 집어 올리면 멈춰요." : `♪ ${fmt(p * dur)} 부터 재생 — 핀을 집어 올리면 멈춰요.`);
   } else {
-    pendingSeek = p;
+    pendingSeek = p > 0 ? p : null;
     if (same) player.playVideo(); else player.loadVideoById(current.id);
     setStatus("♪ 재생 중 — 핀을 집어 올리면 멈춰요.");
   }
@@ -295,7 +296,7 @@ function update(dt, now) {
     grabbed = true; armed = false;
     if (!current) selectSong(songs[0]);
     if (onRecord) { onRecord = false; if (ytReady) player.pauseVideo(); }
-    setStatus("핀을 잡았어요. 바깥쪽=곡 처음, 안쪽=곡 끝. 원하는 위치에 놓아보세요.");
+    setStatus("핀을 잡았어요. 중심 쪽 끝까지 가서 놓으면 처음부터, 바깥쪽에 놓으면 그 위치부터 재생돼요.");
   }
   if (grabbed && !inp.down) {
     grabbed = false;
@@ -350,7 +351,7 @@ function drawRecord() {
     const hot = onRecordAt(theta);
     ctx.setLineDash([8, 8]); ctx.lineWidth = 2;
     ctx.strokeStyle = hot ? "rgba(226,103,59,.95)" : "rgba(226,103,59,.35)";
-    [0.95, 0.34].forEach((k) => { ctx.beginPath(); ctx.arc(0, 0, R * k, 0, 7); ctx.stroke(); });
+    [0.95, 0.42].forEach((k) => { ctx.beginPath(); ctx.arc(0, 0, R * k, 0, 7); ctx.stroke(); });
     ctx.setLineDash([]);
   }
   // 회전하는 라벨
@@ -409,7 +410,7 @@ function drawTime() {
   let txt, hot = false;
   if (grabbed) {
     hot = onRecordAt(theta);
-    txt = !hot ? "LP 위에 올려보세요" : dur > 0 ? `${fmt(progressAt(theta) * dur)} / ${fmt(dur)}` : "LIVE";
+    txt = !hot ? "LP 위에 올려보세요" : inStartZone(theta) ? "↺ 처음부터 재생" : dur > 0 ? `${fmt(progressAt(theta) * dur)} / ${fmt(dur)}` : "LIVE";
   } else txt = dur > 0 ? `${fmt(player.getCurrentTime())} / ${fmt(dur)}` : "LIVE";
   const n = needlePos(theta);
   ctx.font = "600 22px system-ui, sans-serif";
