@@ -10,6 +10,8 @@ const L = D * 0.9;                      // 암 길이
 const A0 = Math.atan2(C.y - P.y, C.x - P.x);
 const T_REST = 0.85, T_MIN = 0.05, T_MAX = 0.95;   // 암 각도(θ) 범위
 const GRAB_R = 110;
+const BOX = { x: 825, y: 520, w: 160, h: 160 };   // 오른쪽 아래 '다음 곡' 상자
+const inBox = (p) => p.x >= BOX.x && p.x <= BOX.x + BOX.w && p.y >= BOX.y && p.y <= BOX.y + BOX.h;
 
 const needlePos = (t) => ({ x: P.x + L * Math.cos(A0 - t), y: P.y + L * Math.sin(A0 - t) });
 const onRecordAt = (t) => {
@@ -45,7 +47,7 @@ const statusEl = document.getElementById("status");
 let theta = T_REST, grabbed = false, armed = true, onRecord = false, lift = 0;
 let spin = 0, angle = 0, playing = false;
 let prevDown = false, tap = null, lastTap = 0;
-let pendingSeek = null, lastSeekAt = 0;
+let pendingSeek = null, lastSeekAt = 0, boxFlash = -1e9;
 const ripples = [];
 const mouse = { x: 0, y: 0, down: false };
 const hand = { x: 0, y: 0, thumb: null, index: null, down: false, visible: false, last: 0 };
@@ -280,7 +282,7 @@ function nextSong() {
 }
 function onTap(now, p) {
   ripples.push({ x: p.x, y: p.y, t: now });
-  if (now - lastTap < 700) { lastTap = 0; nextSong(); } else lastTap = now;
+  if (now - lastTap < 700) { lastTap = 0; boxFlash = now; nextSong(); } else lastTap = now;
 }
 
 /* ───────── 업데이트 ───────── */
@@ -292,7 +294,7 @@ function update(dt, now) {
   const near = Math.hypot(inp.x - n.x, inp.y - n.y) < GRAB_R;
 
   if (!inp.down) armed = true;
-  if (inp.down && armed && !grabbed && near) {
+  if (inp.down && armed && !grabbed && near && !inBox(inp)) {
     grabbed = true; armed = false;
     if (!current) selectSong(songs[0]);
     if (onRecord) { onRecord = false; if (ytReady) player.pauseVideo(); }
@@ -304,8 +306,8 @@ function update(dt, now) {
     else setStatus("LP 위가 아니에요. 핀이 제자리로 돌아갑니다.");
   }
 
-  // 빈 곳 더블 핀치 → 다음 곡
-  if (inp.down && !prevDown) tap = !grabbed && !near ? { t: now, x: inp.x, y: inp.y } : null;
+  // 오른쪽 아래 상자에서 더블 핀치 → 다음 곡
+  if (inp.down && !prevDown) tap = !grabbed && inBox(inp) ? { t: now, x: inp.x, y: inp.y } : null;
   if (tap && (grabbed || now - tap.t > 350 || Math.hypot(inp.x - tap.x, inp.y - tap.y) > 70)) tap = null;
   if (!inp.down && prevDown && tap) { onTap(now, tap); tap = null; }
   prevDown = inp.down;
@@ -421,6 +423,20 @@ function drawTime() {
   ctx.fillText(txt, x, y + 1);
 }
 
+function drawBox() {
+  const now = performance.now(), inp = hand.visible ? hand : mouse;
+  const flash = clamp(1 - (now - boxFlash) / 400, 0, 1), hover = inBox(inp) && !grabbed;
+  ctx.fillStyle = flash > 0 ? `rgba(226,103,59,${0.5 + 0.4 * flash})` : hover ? "rgba(226,103,59,.4)" : "rgba(0,0,0,.4)";
+  ctx.beginPath(); ctx.roundRect(BOX.x, BOX.y, BOX.w, BOX.h, 18); ctx.fill();
+  ctx.strokeStyle = hover ? "#e2673b" : "rgba(255,255,255,.45)"; ctx.lineWidth = 3; ctx.setLineDash([10, 8]);
+  ctx.stroke(); ctx.setLineDash([]);
+  const cx = BOX.x + BOX.w / 2, cy = BOX.y + BOX.h / 2;
+  ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.font = "56px system-ui, sans-serif"; ctx.fillText("⏭", cx, cy - 22);
+  ctx.font = "700 24px system-ui, sans-serif"; ctx.fillText("다음 곡", cx, cy + 28);
+  ctx.font = "14px system-ui, sans-serif"; ctx.fillStyle = "rgba(255,255,255,.7)"; ctx.fillText("두 번 집기", cx, cy + 56);
+}
+
 function drawRipples() {
   const now = performance.now();
   for (let i = ripples.length - 1; i >= 0; i--) {
@@ -435,7 +451,7 @@ function render() {
   const bg = ctx.createLinearGradient(0, 0, W, H);
   bg.addColorStop(0, "#4a3220"); bg.addColorStop(1, "#2a1b11");
   ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
-  drawRecord(); drawArm(); drawHand(); drawTime(); drawRipples();
+  drawRecord(); drawBox(); drawArm(); drawHand(); drawTime(); drawRipples();
 }
 
 let prev = performance.now();
