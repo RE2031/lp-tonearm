@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tonearm — 손으로 올리는 LP 플레이어</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <section class="stage">
+    <canvas id="stage" width="1000" height="700"></canvas>
+    <div id="status" class="status">톤암(핀)을 마우스로 끌거나, 카메라를 켜고 엄지·검지로 집어서 LP 위에 올려보세요.</div>
+  </section>
+
+  <aside class="panel">
+    <h1>Tonearm</h1>
+    <p class="sub">엄지와 검지로 핀을 집어 LP 위에 올리면 재생돼요.</p>
+
+    <button id="cam-btn" class="primary">📷 카메라 켜기</button>
+    <div class="cam-wrap" hidden><video id="cam" playsinline muted></video></div>
+
+    <h2>지금 곡</h2>
+    <div id="now" class="now">곡을 선택하세요</div>
+
+    <h2>곡 추가 · 검색</h2>
+    <form id="add-form">
+      <input id="add-input" placeholder="유튜브 링크 붙여넣기 또는 검색어" autocomplete="off">
+      <button>추가</button>
+    </form>
+    <details>
+      <summary>YouTube API 키 (검색용, 선택)</summary>
+      <input id="api-key" placeholder="YouTube Data API v3 key" autocomplete="off">
+      <small>키가 있으면 검색어로 곡을 찾고, 없으면 링크만 추가돼요. 키는 이 브라우저에만 저장됩니다.</small>
+    </details>
+
+    <ul id="songs" class="songs"></ul>
+
+    <div class="yt-wrap"><div id="yt"></div></div>
+  </aside>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+:root{--bg:#14110f;--panel:#1d1815;--line:#33291f;--fg:#efe6d8;--dim:#a3947f;--accent:#e2673b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,"Pretendard","Malgun Gothic",sans-serif}
+main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16px;min-height:100vh;align-items:start}
+.stage{position:relative}
+canvas{width:100%;height:auto;aspect-ratio:1000/700;display:block;border-radius:14px;touch-action:none;cursor:grab;background:#2a1d14}
+.status{position:absolute;left:14px;bottom:12px;right:14px;font-size:14px;color:#f5e9d6;text-shadow:0 1px 3px #000;pointer-events:none}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:10px}
+h1{margin:0;font-size:24px;letter-spacing:.04em}
+h2{margin:10px 0 0;font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.1em}
+.sub{margin:0;color:var(--dim);font-size:13px}
+button,input{font:inherit;color:var(--fg);background:#2a221c;border:1px solid var(--line);border-radius:8px;padding:9px 12px}
+button{cursor:pointer}button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+input{width:100%}
+#add-form{display:flex;gap:6px}#add-form button{flex:none}
+details{font-size:13px;color:var(--dim)}details input{margin:8px 0 4px}small{display:block}
+.cam-wrap{border-radius:8px;overflow:hidden;border:1px solid var(--line)}
+.cam-wrap video{width:100%;display:block;transform:scaleX(-1)}
+.now{font-size:15px}
+.songs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;max-height:240px;overflow:auto}
+.songs li{padding:8px 10px;border-radius:8px;cursor:pointer;font-size:14px;display:flex;gap:8px;align-items:center}
+.songs li:hover{background:#2a221c}.songs li.on{background:#3a2a20;outline:1px solid var(--accent)}
+.songs img{width:44px;height:33px;object-fit:cover;border-radius:4px;flex:none}
+.yt-wrap{aspect-ratio:16/9;background:#000;border-radius:8px;overflow:hidden}
+.yt-wrap iframe{width:100%;height:100%}
+@media(max-width:900px){main{grid-template-columns:1fr}}

@@ -1,0 +1,311 @@
+import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+/* ───────── 기하 ───────── */
+const W = 1000, H = 700;
+const C = { x: 350, y: 360 };          // LP 중심
+const R = 270;                          // LP 반지름
+const P = { x: 890, y: 110 };          // 톤암 회전축
+const D = Math.hypot(C.x - P.x, C.y - P.y);
+const L = D * 0.9;                      // 암 길이
+const A0 = Math.atan2(C.y - P.y, C.x - P.x);
+const T_REST = 0.85, T_MIN = 0.05, T_MAX = 0.95;   // 암 각도(θ) 범위
+const GRAB_R = 110;
+
+const needlePos = (t) => ({ x: P.x + L * Math.cos(A0 - t), y: P.y + L * Math.sin(A0 - t) });
+const onRecordAt = (t) => {
+  const n = needlePos(t), r = Math.hypot(n.x - C.x, n.y - C.y);
+  return r > R * 0.34 && r < R * 0.95;
+};
+const normAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+
+/* ───────── 상태 ───────── */
+const canvas = document.getElementById("stage");
+const ctx = canvas.getContext("2d");
+const dpr = Math.min(window.devicePixelRatio || 1, 2);
+canvas.width = W * dpr; canvas.height = H * dpr;
+ctx.scale(dpr, dpr);
+const statusEl = document.getElementById("status");
+
+let theta = T_REST, grabbed = false, armed = true, onRecord = false, lift = 0;
+let spin = 0, angle = 0, playing = false;
+const mouse = { x: 0, y: 0, down: false };
+const hand = { x: 0, y: 0, thumb: null, index: null, down: false, visible: false, last: 0 };
+const setStatus = (s) => (statusEl.textContent = s);
+
+/* ───────── 곡 목록 / YouTube ───────── */
+let songs = [
+  { id: "jfKfPfyJRdk", title: "lofi hip hop radio 📚 beats to relax/study to" },
+  { id: "5qap5aO4i9A", title: "lofi hip hop radio — beats to sleep/chill to" },
+  { id: "dQw4w9WgXcQ", title: "Rick Astley — Never Gonna Give You Up" },
+  { id: "9bZkp7q19f0", title: "PSY — GANGNAM STYLE" },
+];
+let current = null, labelImg = null, ytReady = false, player = null;
+const songsEl = document.getElementById("songs");
+const nowEl = document.getElementById("now");
+const thumb = (id) => `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+
+function renderSongs() {
+  songsEl.innerHTML = "";
+  songs.forEach((s) => {
+    const li = document.createElement("li");
+    if (current && current.id === s.id) li.className = "on";
+    li.innerHTML = `<img src="${thumb(s.id)}" alt=""><span></span>`;
+    li.querySelector("span").textContent = s.title;
+    li.onclick = () => selectSong(s);
+    songsEl.appendChild(li);
+  });
+}
+
+function selectSong(s) {
+  current = s;
+  nowEl.textContent = s.title;
+  labelImg = new Image();
+  labelImg.src = thumb(s.id);
+  renderSongs();
+  if (!ytReady) return;
+  if (onRecord) player.loadVideoById(s.id);
+  else { player.cueVideoById(s.id); setStatus("곡을 골랐어요. 핀을 LP 위에 올려보세요."); }
+}
+
+window.onYouTubeIframeAPIReady = () => {
+  player = new YT.Player("yt", {
+    width: "100%", height: "100%",
+    playerVars: { playsinline: 1, rel: 0 },
+    events: {
+      onReady: () => { ytReady = true; if (current) player.cueVideoById(current.id); },
+      onStateChange: (e) => {
+        playing = e.data === YT.PlayerState.PLAYING || e.data === YT.PlayerState.BUFFERING;
+        if (e.data === YT.PlayerState.ENDED) { onRecord = false; setStatus("곡이 끝났어요. 핀이 제자리로 돌아갑니다."); }
+      },
+      onError: () => { onRecord = false; setStatus("이 영상은 재생할 수 없어요 (퍼가기 제한). 다른 곡을 골라보세요."); },
+    },
+  });
+};
+const s = document.createElement("script");
+s.src = "https://www.youtube.com/iframe_api";
+document.head.appendChild(s);
+
+function startPlayback() {
+  if (!current) selectSong(songs[0]);
+  if (!ytReady) { setStatus("플레이어 로딩 중… 잠시 후 다시 올려주세요."); onRecord = false; return; }
+  if (player.getVideoData().video_id !== current.id) player.loadVideoById(current.id);
+  else player.playVideo();
+  setStatus("♪ 재생 중 — 핀을 집어 올리면 멈춰요.");
+}
+
+/* 곡 추가 / 검색 */
+const parseId = (t) => (t.match(/(?:v=|youtu\.be\/|embed\/|shorts\/)([\w-]{11})/) || t.match(/^([\w-]{11})$/) || [])[1];
+const keyEl = document.getElementById("api-key");
+try { keyEl.value = localStorage.getItem("yt_key") || ""; } catch {}
+keyEl.onchange = () => { try { localStorage.setItem("yt_key", keyEl.value.trim()); } catch {} };
+
+document.getElementById("add-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const input = document.getElementById("add-input");
+  const text = input.value.trim();
+  if (!text) return;
+  const id = parseId(text);
+  if (id) {
+    let title = id;
+    try {
+      const r = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`);
+      title = (await r.json()).title;
+    } catch {}
+    songs = [{ id, title }, ...songs.filter((x) => x.id !== id)];
+    renderSongs(); selectSong(songs[0]);
+  } else if (keyEl.value.trim()) {
+    try {
+      const u = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&maxResults=8&q=${encodeURIComponent(text)}&key=${keyEl.value.trim()}`;
+      const j = await (await fetch(u)).json();
+      if (j.error) throw new Error(j.error.message);
+      const div = document.createElement("div"); // HTML 엔티티 해제
+      songs = j.items.map((i) => { div.innerHTML = i.snippet.title; return { id: i.id.videoId, title: div.textContent }; });
+      renderSongs();
+    } catch (err) { setStatus("검색 실패: " + err.message); }
+  } else {
+    setStatus("검색하려면 API 키가 필요해요. 유튜브 링크를 붙여넣어도 됩니다.");
+  }
+  input.value = "";
+};
+
+/* ───────── 손 인식 ───────── */
+const video = document.getElementById("cam");
+const camBtn = document.getElementById("cam-btn");
+let landmarker = null, lastVideoTime = -1;
+
+camBtn.onclick = async () => {
+  camBtn.disabled = true; camBtn.textContent = "불러오는 중…";
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: "user" } });
+    video.srcObject = stream; await video.play();
+    video.parentElement.hidden = false;
+    const fileset = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+    const opts = (delegate) => ({
+      baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task", delegate },
+      runningMode: "VIDEO", numHands: 1,
+    });
+    try { landmarker = await HandLandmarker.createFromOptions(fileset, opts("GPU")); }
+    catch { landmarker = await HandLandmarker.createFromOptions(fileset, opts("CPU")); }
+    camBtn.textContent = "📷 카메라 켜짐";
+    setStatus("손을 보여주세요. 엄지+검지를 붙여(핀치) 핀 끝을 집고, 손을 움직여 LP 위에서 놓으세요.");
+  } catch (err) {
+    camBtn.disabled = false; camBtn.textContent = "📷 카메라 켜기";
+    setStatus("카메라를 쓸 수 없어요: " + err.message + " (localhost 또는 https 로 열어야 해요)");
+  }
+};
+
+const toCanvas = (lm) => ({
+  x: clamp(((1 - lm.x) - 0.5) * 1.3 + 0.5, 0, 1) * W,   // 거울 모드 + 이동 범위 확대
+  y: clamp((lm.y - 0.5) * 1.3 + 0.5, 0, 1) * H,
+});
+
+function detectHand(now) {
+  if (!landmarker || video.readyState < 2 || video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+  const res = landmarker.detectForVideo(video, now);
+  if (!res.landmarks.length) { if (now - hand.last > 300) { hand.visible = false; hand.down = false; } return; }
+  const lm = res.landmarks[0];
+  const t = toCanvas(lm[4]), i = toCanvas(lm[8]);
+  const size = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y) || 1;
+  const ratio = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y) / size;
+  hand.down = hand.down ? ratio < 0.42 : ratio < 0.28;    // 히스테리시스
+  const px = (t.x + i.x) / 2, py = (t.y + i.y) / 2;
+  const k = hand.visible ? 0.55 : 1;
+  hand.x += (px - hand.x) * k; hand.y += (py - hand.y) * k;
+  hand.thumb = t; hand.index = i; hand.visible = true; hand.last = now;
+}
+
+/* ───────── 마우스 (카메라 없이 테스트) ───────── */
+const toLocal = (e) => {
+  const r = canvas.getBoundingClientRect();
+  return { x: ((e.clientX - r.left) / r.width) * W, y: ((e.clientY - r.top) / r.height) * H };
+};
+canvas.addEventListener("pointerdown", (e) => { Object.assign(mouse, toLocal(e), { down: true }); canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener("pointermove", (e) => Object.assign(mouse, toLocal(e)));
+canvas.addEventListener("pointerup", () => (mouse.down = false));
+canvas.addEventListener("pointercancel", () => (mouse.down = false));
+
+/* ───────── 업데이트 ───────── */
+function update(dt, now) {
+  detectHand(now);
+  const inp = hand.visible ? hand : mouse;
+  const n = needlePos(theta);
+  const near = Math.hypot(inp.x - n.x, inp.y - n.y) < GRAB_R;
+
+  if (!inp.down) armed = true;
+  if (inp.down && armed && !grabbed && near) {
+    grabbed = true; armed = false;
+    if (onRecord) { onRecord = false; if (ytReady) player.pauseVideo(); }
+    setStatus("핀을 잡았어요. LP 홈(점선 고리) 위에서 놓아보세요.");
+  }
+  if (grabbed && !inp.down) {
+    grabbed = false;
+    if (onRecordAt(theta)) { onRecord = true; startPlayback(); }
+    else setStatus("LP 위가 아니에요. 핀이 제자리로 돌아갑니다.");
+  }
+
+  if (grabbed) {
+    const a = Math.atan2(inp.y - P.y, inp.x - P.x);
+    const target = clamp(normAngle(A0 - a), T_MIN, T_MAX);
+    theta += (target - theta) * Math.min(1, dt * 20);
+  } else {
+    const target = onRecord ? theta : T_REST;
+    theta += (target - theta) * Math.min(1, dt * 6);
+  }
+  lift += ((grabbed ? 1 : 0) - lift) * Math.min(1, dt * 12);
+
+  const wantSpin = onRecord && playing ? 3.5 : 0;   // rad/s ≈ 33rpm
+  spin += (wantSpin - spin) * Math.min(1, dt * 1.5);
+  angle += spin * dt;
+}
+
+/* ───────── 렌더 ───────── */
+function drawRecord() {
+  ctx.save(); ctx.translate(C.x, C.y);
+  // 턴테이블 플래터
+  ctx.fillStyle = "#0d0d0e"; ctx.beginPath(); ctx.arc(0, 0, R + 16, 0, 7); ctx.fill();
+  ctx.fillStyle = "#2b2b2e"; ctx.beginPath(); ctx.arc(0, 0, R + 6, 0, 7); ctx.fill();
+  // 비닐
+  const g = ctx.createRadialGradient(0, 0, 0, 0, 0, R);
+  g.addColorStop(0, "#1c1c1f"); g.addColorStop(1, "#08080a");
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, R, 0, 7); ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,.04)"; ctx.lineWidth = 1;
+  for (let r = R * 0.4; r < R * 0.97; r += 3.5) { ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.stroke(); }
+  if (ctx.createConicGradient) {                       // 고정된 빛 반사
+    const cg = ctx.createConicGradient(-0.6, 0, 0);
+    [[0, 0], [.07, .13], [.14, 0], [.5, 0], [.57, .13], [.64, 0], [1, 0]].forEach(([o, a]) => cg.addColorStop(o, `rgba(255,255,255,${a})`));
+    ctx.fillStyle = cg; ctx.beginPath(); ctx.arc(0, 0, R * 0.97, 0, 7); ctx.fill();
+  }
+  // 드롭 존 표시
+  if (grabbed) {
+    const hot = onRecordAt(theta);
+    ctx.setLineDash([8, 8]); ctx.lineWidth = 2;
+    ctx.strokeStyle = hot ? "rgba(226,103,59,.95)" : "rgba(226,103,59,.35)";
+    [0.95, 0.34].forEach((k) => { ctx.beginPath(); ctx.arc(0, 0, R * k, 0, 7); ctx.stroke(); });
+    ctx.setLineDash([]);
+  }
+  // 회전하는 라벨
+  ctx.rotate(angle);
+  ctx.save(); ctx.beginPath(); ctx.arc(0, 0, R * 0.32, 0, 7); ctx.clip();
+  if (labelImg && labelImg.complete && labelImg.naturalWidth) {
+    const s = R * 0.64; ctx.drawImage(labelImg, -s * 0.89, -s / 2, s * 1.78, s);  // 16:9 → 중앙 크롭 느낌
+  } else { ctx.fillStyle = "#c9573a"; ctx.fillRect(-R, -R, R * 2, R * 2); }
+  ctx.restore();
+  ctx.fillStyle = "rgba(0,0,0,.25)"; ctx.beginPath(); ctx.arc(R * 0.2, 0, 4, 0, 7); ctx.fill();
+  ctx.fillStyle = "#ddd"; ctx.beginPath(); ctx.arc(0, 0, 6, 0, 7); ctx.fill();
+  ctx.restore();
+}
+
+function drawArm() {
+  const n = needlePos(theta), a = A0 - theta, ux = Math.cos(a), uy = Math.sin(a);
+  const off = 6 + lift * 18;
+  ctx.lineCap = "round";
+  ctx.strokeStyle = "rgba(0,0,0,.35)"; ctx.lineWidth = 9;                       // 그림자
+  ctx.beginPath(); ctx.moveTo(P.x + off, P.y + off); ctx.lineTo(n.x + off, n.y + off); ctx.stroke();
+  ctx.strokeStyle = "#8d8d92"; ctx.lineWidth = 12;                              // 카운터웨이트
+  ctx.beginPath(); ctx.moveTo(P.x - ux * 20, P.y - uy * 20); ctx.lineTo(P.x - ux * 70, P.y - uy * 70); ctx.stroke();
+  const g = ctx.createLinearGradient(P.x, P.y, n.x, n.y);                        // 암
+  g.addColorStop(0, "#f2f2f4"); g.addColorStop(1, "#b5b5ba");
+  ctx.strokeStyle = g; ctx.lineWidth = 7;
+  ctx.beginPath(); ctx.moveTo(P.x, P.y); ctx.lineTo(n.x, n.y); ctx.stroke();
+  ctx.fillStyle = "#3a3a3e"; ctx.beginPath(); ctx.arc(P.x, P.y, 30, 0, 7); ctx.fill();  // 베이스
+  ctx.fillStyle = "#d4d4d8"; ctx.beginPath(); ctx.arc(P.x, P.y, 16, 0, 7); ctx.fill();
+  // 헤드셸
+  ctx.save(); ctx.translate(n.x, n.y); ctx.rotate(a);
+  const sc = 1 + lift * 0.12; ctx.scale(sc, sc);
+  ctx.fillStyle = "#1f1f22"; ctx.beginPath(); ctx.roundRect(-46, -11, 56, 22, 5); ctx.fill();
+  ctx.fillStyle = "#e2673b"; ctx.fillRect(-46, -11, 8, 22);
+  ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(0, 0, 2.5, 0, 7); ctx.fill();  // 바늘 끝
+  ctx.restore();
+  // 잡을 수 있음 표시
+  const inp = hand.visible ? hand : mouse;
+  if (!grabbed && Math.hypot(inp.x - n.x, inp.y - n.y) < GRAB_R) {
+    ctx.strokeStyle = "rgba(226,103,59,.8)"; ctx.lineWidth = 3; ctx.setLineDash([6, 6]);
+    ctx.beginPath(); ctx.arc(n.x, n.y, 44, 0, 7); ctx.stroke(); ctx.setLineDash([]);
+  }
+}
+
+function drawHand() {
+  if (!hand.visible || !hand.thumb) return;
+  const c = hand.down ? "#e2673b" : "#ffffff";
+  ctx.strokeStyle = c; ctx.fillStyle = c; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(hand.thumb.x, hand.thumb.y); ctx.lineTo(hand.index.x, hand.index.y); ctx.stroke();
+  [hand.thumb, hand.index].forEach((p) => { ctx.beginPath(); ctx.arc(p.x, p.y, 8, 0, 7); ctx.fill(); });
+  ctx.globalAlpha = 0.6; ctx.beginPath(); ctx.arc(hand.x, hand.y, hand.down ? 14 : 22, 0, 7); ctx.stroke(); ctx.globalAlpha = 1;
+}
+
+function render() {
+  const bg = ctx.createLinearGradient(0, 0, W, H);
+  bg.addColorStop(0, "#4a3220"); bg.addColorStop(1, "#2a1b11");
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+  drawRecord(); drawArm(); drawHand();
+}
+
+let prev = performance.now();
+function loop(now) {
+  update(Math.min((now - prev) / 1000, 0.05), now); prev = now;
+  render(); requestAnimationFrame(loop);
+}
+renderSongs();
+requestAnimationFrame(loop);
