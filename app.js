@@ -29,6 +29,8 @@ const statusEl = document.getElementById("status");
 
 let theta = T_REST, grabbed = false, armed = true, onRecord = false, lift = 0;
 let spin = 0, angle = 0, playing = false;
+let prevDown = false, tap = null, lastTap = 0;
+const ripples = [];
 const mouse = { x: 0, y: 0, down: false };
 const hand = { x: 0, y: 0, thumb: null, index: null, down: false, visible: false, last: 0 };
 const setStatus = (s) => (statusEl.textContent = s);
@@ -186,6 +188,16 @@ canvas.addEventListener("pointermove", (e) => Object.assign(mouse, toLocal(e)));
 canvas.addEventListener("pointerup", () => (mouse.down = false));
 canvas.addEventListener("pointercancel", () => (mouse.down = false));
 
+function nextSong() {
+  const i = current ? songs.findIndex((x) => x.id === current.id) : -1;
+  selectSong(songs[(i + 1) % songs.length]);
+  setStatus("⏭ 다음 곡: " + current.title);
+}
+function onTap(now, p) {
+  ripples.push({ x: p.x, y: p.y, t: now });
+  if (now - lastTap < 700) { lastTap = 0; nextSong(); } else lastTap = now;
+}
+
 /* ───────── 업데이트 ───────── */
 function update(dt, now) {
   detectHand(now);
@@ -204,6 +216,12 @@ function update(dt, now) {
     if (onRecordAt(theta)) { onRecord = true; startPlayback(); }
     else setStatus("LP 위가 아니에요. 핀이 제자리로 돌아갑니다.");
   }
+
+  // 빈 곳 더블 핀치 → 다음 곡
+  if (inp.down && !prevDown) tap = !grabbed && !near ? { t: now, x: inp.x, y: inp.y } : null;
+  if (tap && (grabbed || now - tap.t > 350 || Math.hypot(inp.x - tap.x, inp.y - tap.y) > 70)) tap = null;
+  if (!inp.down && prevDown && tap) { onTap(now, tap); tap = null; }
+  prevDown = inp.down;
 
   if (grabbed) {
     const a = Math.atan2(inp.y - P.y, inp.x - P.x);
@@ -295,11 +313,21 @@ function drawHand() {
   ctx.globalAlpha = 0.6; ctx.beginPath(); ctx.arc(hand.x, hand.y, hand.down ? 14 : 22, 0, 7); ctx.stroke(); ctx.globalAlpha = 1;
 }
 
+function drawRipples() {
+  const now = performance.now();
+  for (let i = ripples.length - 1; i >= 0; i--) {
+    const k = (now - ripples[i].t) / 500;
+    if (k >= 1) { ripples.splice(i, 1); continue; }
+    ctx.strokeStyle = `rgba(255,255,255,${0.7 * (1 - k)})`; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(ripples[i].x, ripples[i].y, 16 + k * 50, 0, 7); ctx.stroke();
+  }
+}
+
 function render() {
   const bg = ctx.createLinearGradient(0, 0, W, H);
   bg.addColorStop(0, "#4a3220"); bg.addColorStop(1, "#2a1b11");
   ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
-  drawRecord(); drawArm(); drawHand();
+  drawRecord(); drawArm(); drawHand(); drawRipples();
 }
 
 let prev = performance.now();
