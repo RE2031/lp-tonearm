@@ -16,6 +16,20 @@ const onRecordAt = (t) => {
   const n = needlePos(t), r = Math.hypot(n.x - C.x, n.y - C.y);
   return r > R * 0.34 && r < R * 0.95;
 };
+const R_OUT = R * 0.95, R_IN = R * 0.34;       // 바깥(곡 시작) ~ 안쪽(곡 끝)
+const progressAt = (t) => {
+  const n = needlePos(t);
+  return clamp((R_OUT - Math.hypot(n.x - C.x, n.y - C.y)) / (R_OUT - R_IN), 0, 1);
+};
+const thetaForProgress = (p) => {
+  const r = R_OUT - p * (R_OUT - R_IN);
+  return Math.acos(clamp((D * D + L * L - r * r) / (2 * D * L), -1, 1));
+};
+const fmt = (sec) => {
+  sec = Math.max(0, Math.floor(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), r = String(sec % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${r}` : `${m}:${r}`;
+};
 const normAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 
@@ -30,6 +44,7 @@ const statusEl = document.getElementById("status");
 let theta = T_REST, grabbed = false, armed = true, onRecord = false, lift = 0;
 let spin = 0, angle = 0, playing = false;
 let prevDown = false, tap = null, lastTap = 0;
+let pendingSeek = null, lastSeekAt = 0;
 const ripples = [];
 const mouse = { x: 0, y: 0, down: false };
 const hand = { x: 0, y: 0, thumb: null, index: null, down: false, visible: false, last: 0 };
@@ -37,10 +52,10 @@ const setStatus = (s) => (statusEl.textContent = s);
 
 /* ───────── 곡 목록 / YouTube ───────── */
 let songs = [
-  { id: "jfKfPfyJRdk", title: "lofi hip hop radio 📚 beats to relax/study to" },
-  { id: "5qap5aO4i9A", title: "lofi hip hop radio — beats to sleep/chill to" },
   { id: "dQw4w9WgXcQ", title: "Rick Astley — Never Gonna Give You Up" },
   { id: "9bZkp7q19f0", title: "PSY — GANGNAM STYLE" },
+  { id: "kJQP7kiw5Fk", title: "Luis Fonsi — Despacito" },
+  { id: "jfKfPfyJRdk", title: "lofi hip hop radio 📚 (라이브: 위치 이동 불가)" },
 ];
 let current = null, labelImg = null, ytReady = false, player = null;
 const songsEl = document.getElementById("songs");
@@ -59,8 +74,11 @@ function renderSongs() {
   });
 }
 
+const getDur = () => (ytReady && player.getDuration ? player.getDuration() || 0 : 0);
+
 function selectSong(s) {
   current = s;
+  if (onRecord) { pendingSeek = null; lastSeekAt = performance.now(); }
   nowEl.textContent = s.title;
   labelImg = new Image();
   labelImg.src = thumb(s.id);
@@ -78,6 +96,11 @@ window.onYouTubeIframeAPIReady = () => {
       onReady: () => { ytReady = true; if (current) player.cueVideoById(current.id); },
       onStateChange: (e) => {
         playing = e.data === YT.PlayerState.PLAYING || e.data === YT.PlayerState.BUFFERING;
+        if (e.data === YT.PlayerState.PLAYING && pendingSeek !== null) {
+          const dur = getDur();
+          if (dur > 0) { player.seekTo(Math.min(pendingSeek * dur, dur - 2), true); lastSeekAt = performance.now(); }
+          pendingSeek = null;
+        }
         if (e.data === YT.PlayerState.ENDED) { onRecord = false; setStatus("곡이 끝났어요. 핀이 제자리로 돌아갑니다."); }
       },
       onError: () => { onRecord = false; setStatus("이 영상은 재생할 수 없어요 (퍼가기 제한). 다른 곡을 골라보세요."); },
@@ -88,12 +111,19 @@ const s = document.createElement("script");
 s.src = "https://www.youtube.com/iframe_api";
 document.head.appendChild(s);
 
-function startPlayback() {
+function startPlayback(p) {
   if (!current) selectSong(songs[0]);
   if (!ytReady) { setStatus("플레이어 로딩 중… 잠시 후 다시 올려주세요."); onRecord = false; return; }
-  if (player.getVideoData().video_id !== current.id) player.loadVideoById(current.id);
-  else player.playVideo();
-  setStatus("♪ 재생 중 — 핀을 집어 올리면 멈춰요.");
+  const dur = getDur(), same = player.getVideoData().video_id === current.id;
+  if (same && dur > 0) {
+    player.seekTo(Math.min(p * dur, dur - 2), true); lastSeekAt = performance.now(); pendingSeek = null;
+    player.playVideo();
+    setStatus(`♪ ${fmt(p * dur)} 부터 재생 — 핀을 집어 올리면 멈춰요.`);
+  } else {
+    pendingSeek = p;
+    if (same) player.playVideo(); else player.loadVideoById(current.id);
+    setStatus("♪ 재생 중 — 핀을 집어 올리면 멈춰요.");
+  }
 }
 
 /* 곡 추가 / 검색 */
@@ -208,12 +238,13 @@ function update(dt, now) {
   if (!inp.down) armed = true;
   if (inp.down && armed && !grabbed && near) {
     grabbed = true; armed = false;
+    if (!current) selectSong(songs[0]);
     if (onRecord) { onRecord = false; if (ytReady) player.pauseVideo(); }
-    setStatus("핀을 잡았어요. LP 홈(점선 고리) 위에서 놓아보세요.");
+    setStatus("핀을 잡았어요. 바깥쪽=곡 처음, 안쪽=곡 끝. 원하는 위치에 놓아보세요.");
   }
   if (grabbed && !inp.down) {
     grabbed = false;
-    if (onRecordAt(theta)) { onRecord = true; startPlayback(); }
+    if (onRecordAt(theta)) { onRecord = true; startPlayback(progressAt(theta)); }
     else setStatus("LP 위가 아니에요. 핀이 제자리로 돌아갑니다.");
   }
 
@@ -228,7 +259,11 @@ function update(dt, now) {
     const target = clamp(normAngle(A0 - a), T_MIN, T_MAX);
     theta += (target - theta) * Math.min(1, dt * 20);
   } else {
-    const target = onRecord ? theta : T_REST;
+    let target = onRecord ? theta : T_REST;
+    if (onRecord && pendingSeek === null && now - lastSeekAt > 1200) {
+      const dur = getDur();
+      if (dur > 0) target = thetaForProgress(clamp(player.getCurrentTime() / dur, 0, 1));
+    }
     theta += (target - theta) * Math.min(1, dt * 6);
   }
   lift += ((grabbed ? 1 : 0) - lift) * Math.min(1, dt * 12);
@@ -313,6 +348,23 @@ function drawHand() {
   ctx.globalAlpha = 0.6; ctx.beginPath(); ctx.arc(hand.x, hand.y, hand.down ? 14 : 22, 0, 7); ctx.stroke(); ctx.globalAlpha = 1;
 }
 
+function drawTime() {
+  if (!grabbed && !onRecord) return;
+  const dur = getDur();
+  let txt, hot = false;
+  if (grabbed) {
+    hot = onRecordAt(theta);
+    txt = !hot ? "LP 위에 올려보세요" : dur > 0 ? `${fmt(progressAt(theta) * dur)} / ${fmt(dur)}` : "LIVE";
+  } else txt = dur > 0 ? `${fmt(player.getCurrentTime())} / ${fmt(dur)}` : "LIVE";
+  const n = needlePos(theta);
+  ctx.font = "600 22px system-ui, sans-serif";
+  const w = ctx.measureText(txt).width + 28, x = clamp(n.x - 14, w / 2 + 8, W - w / 2 - 8), y = Math.min(n.y + 56, H - 26);
+  ctx.fillStyle = hot ? "rgba(226,103,59,.92)" : "rgba(0,0,0,.72)";
+  ctx.beginPath(); ctx.roundRect(x - w / 2, y - 18, w, 36, 18); ctx.fill();
+  ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(txt, x, y + 1);
+}
+
 function drawRipples() {
   const now = performance.now();
   for (let i = ripples.length - 1; i >= 0; i--) {
@@ -327,7 +379,7 @@ function render() {
   const bg = ctx.createLinearGradient(0, 0, W, H);
   bg.addColorStop(0, "#4a3220"); bg.addColorStop(1, "#2a1b11");
   ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
-  drawRecord(); drawArm(); drawHand(); drawRipples();
+  drawRecord(); drawArm(); drawHand(); drawTime(); drawRipples();
 }
 
 let prev = performance.now();
