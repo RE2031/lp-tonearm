@@ -10,22 +10,28 @@ const L = D * 0.9;                      // 암 길이
 const A0 = Math.atan2(C.y - P.y, C.x - P.x);
 const T_REST = 0.85, T_MIN = 0.05, T_MAX = 0.95;   // 암 각도(θ) 범위
 const GRAB_R = 110;
-const BOX = { x: 825, y: 520, w: 160, h: 160 };   // 오른쪽 아래 '다음 곡' 상자
-const inBox = (p) => p.x >= BOX.x && p.x <= BOX.x + BOX.w && p.y >= BOX.y && p.y <= BOX.y + BOX.h;
+const BOXES = [                                    // 오른쪽 아래 버튼 상자 (두 번 집기)
+  { id: "restart", x: 840, y: 375, w: 145, h: 140, icon: "↺", label: "처음으로" },
+  { id: "next", x: 840, y: 530, w: 145, h: 140, icon: "⏭", label: "다음 곡" },
+];
+const boxAt = (p) => BOXES.find((b) => p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) || null;
 
 const needlePos = (t) => ({ x: P.x + L * Math.cos(A0 - t), y: P.y + L * Math.sin(A0 - t) });
 const onRecordAt = (t) => {
   const n = needlePos(t), r = Math.hypot(n.x - C.x, n.y - C.y);
-  return r < R * 0.95;                            // 라벨 위(중심부)까지 포함
+  return r < R * 1.05;                            // 라벨 위(중심부)~판 바로 바깥까지 포함
 };
 const R_OUT = R * 0.95, R_IN = R * 0.42;       // R_IN 안쪽(중심부) = 처음부터, 바깥쪽 구간 = 위치 비례
-const inStartZone = (t) => { const n = needlePos(t); return Math.hypot(n.x - C.x, n.y - C.y) < R_IN; };
-const progressAt = (t) => {                       // 중심부에서는 0 (처음부터)
+const SNAP = 0.10;                               // 바깥 가장자리 10% 구간 = 0:00 자석
+const progressAt = (t) => {
   const n = needlePos(t), r = Math.hypot(n.x - C.x, n.y - C.y);
-  return r < R_IN ? 0 : clamp((R_OUT - r) / (R_OUT - R_IN), 0, 0.98);
+  if (r < R_IN) return 0;                         // 중심부 → 처음부터
+  const q = (R_OUT - r) / (R_OUT - R_IN);         // 바깥 0 ~ 안쪽 1
+  return q <= SNAP ? 0 : clamp((q - SNAP) / (1 - SNAP), 0, 0.98);
 };
+const inStartZone = (t) => progressAt(t) === 0;
 const thetaForProgress = (p) => {
-  const r = R_OUT - p * (R_OUT - R_IN);
+  const r = R_OUT - (SNAP + p * (1 - SNAP)) * (R_OUT - R_IN);
   return Math.acos(clamp((D * D + L * L - r * r) / (2 * D * L), -1, 1));
 };
 const fmt = (sec) => {
@@ -47,7 +53,8 @@ const statusEl = document.getElementById("status");
 let theta = T_REST, grabbed = false, armed = true, onRecord = false, lift = 0;
 let spin = 0, angle = 0, playing = false;
 let prevDown = false, tap = null, lastTap = 0;
-let pendingSeek = null, lastSeekAt = 0, boxFlash = -1e9;
+let pendingSeek = null, lastSeekAt = 0, lastTapBox = null;
+const flashAt = {};
 const ripples = [];
 const mouse = { x: 0, y: 0, down: false };
 const hand = { x: 0, y: 0, thumb: null, index: null, down: false, visible: false, last: 0 };
@@ -68,6 +75,7 @@ const songsEl = document.getElementById("songs");
 const nowEl = document.getElementById("now");
 const thumb = (id) => `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
 
+const isTopic = (name) => /- Topic$/.test(name || "");
 const resultsEl = document.getElementById("results");
 const resultsHead = document.getElementById("results-head");
 
@@ -77,7 +85,8 @@ function renderSongs() {
     const li = document.createElement("li");
     if (current && current.id === sg.id) li.className = "on";
     li.innerHTML = `<img src="${thumb(sg.id)}" alt=""><span></span><button title="삭제">✕</button>`;
-    li.querySelector("span").textContent = `${idx + 1}. ${sg.title}`;
+    li.querySelector("span").textContent = `${idx + 1}. ${sg.topic === false ? "⚠ " : ""}${sg.title}`;
+    if (sg.topic === false) li.title = "Topic 영상이 아니라 광고가 나올 수 있어요";
     li.onclick = () => selectSong(sg);
     li.querySelector("button").onclick = (e) => {
       e.stopPropagation();
@@ -176,22 +185,27 @@ document.getElementById("add-form").onsubmit = async (e) => {
   if (!ids.length && /^[\w-]{11}$/.test(text)) ids.push(text);
   if (ids.length) {                                   // 링크(여러 개 가능) → 플레이리스트에 추가
     const items = await Promise.all(ids.map(async (id) => {
-      let title = id;
-      try { title = (await (await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`)).json()).title; } catch {}
-      return { id, title };
+      let title = id, topic;
+      try {
+        const o = await (await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`)).json();
+        title = o.title; topic = isTopic(o.author_name);
+      } catch {}
+      return { id, title, topic };
     }));
     items.forEach((it) => { if (!songs.some((x) => x.id === it.id)) songs = [...songs, it]; });
     saveSongs(); renderSongs(); renderResults();
     selectSong(songs.find((x) => x.id === items[0].id));
-    setStatus(`${items.length}곡을 플레이리스트에 추가했어요 (총 ${songs.length}곡)`);
+    setStatus(`${items.length}곡을 플레이리스트에 추가했어요 (총 ${songs.length}곡)` + (items.some((x) => x.topic === false) ? " — ⚠ Topic 영상이 아닌 곡은 광고가 나올 수 있어요." : ""));
   } else if (keyEl.value.trim()) {                    // 검색 → 결과 목록 (＋ 로 담기)
     try {
-      const u = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&maxResults=10&q=${encodeURIComponent(text)}&key=${keyEl.value.trim()}`;
+      const u = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&videoCategoryId=10&maxResults=50&q=${encodeURIComponent(text + " topic")}&key=${keyEl.value.trim()}`;
       const j = await (await fetch(u)).json();
       if (j.error) throw new Error(j.error.message);
       const div = document.createElement("div");
-      results = j.items.map((i) => { div.innerHTML = i.snippet.title; return { id: i.id.videoId, title: div.textContent }; });
-      renderResults(); setStatus("검색 결과에서 ＋ 를 눌러 플레이리스트에 담으세요.");
+      results = j.items.filter((i) => isTopic(i.snippet.channelTitle)).slice(0, 12)
+        .map((i) => { div.innerHTML = i.snippet.title; return { id: i.id.videoId, title: div.textContent, topic: true }; });
+      renderResults();
+      setStatus(results.length ? "Topic(광고 적은 음원) 결과만 보여줘요. ＋ 를 눌러 담으세요." : "Topic 채널 결과가 없어요. 아티스트명+곡명으로 다시 검색해 보세요.");
     } catch (err) { setStatus("검색 실패: " + err.message); }
   } else {
     setStatus("검색하려면 API 키가 필요해요. 유튜브 링크를 붙여넣으면 바로 추가됩니다 (여러 개도 가능).");
@@ -280,9 +294,18 @@ function nextSong() {
   selectSong(songs[(i + 1) % songs.length]);
   setStatus("⏭ 다음 곡: " + current.title);
 }
-function onTap(now, p) {
-  ripples.push({ x: p.x, y: p.y, t: now });
-  if (now - lastTap < 700) { lastTap = 0; boxFlash = now; nextSong(); } else lastTap = now;
+function restartSong() {
+  if (!onRecord || !ytReady) { setStatus("핀이 LP 위에 있을 때 쓸 수 있어요."); return; }
+  player.seekTo(0, true); player.playVideo();
+  pendingSeek = null; lastSeekAt = performance.now();
+  setStatus("↺ 처음부터 다시 재생");
+}
+function onTap(now, tp) {
+  ripples.push({ x: tp.x, y: tp.y, t: now });
+  if (lastTapBox === tp.id && now - lastTap < 700) {
+    lastTap = 0; lastTapBox = null; flashAt[tp.id] = now;
+    if (tp.id === "next") nextSong(); else restartSong();
+  } else { lastTap = now; lastTapBox = tp.id; }
 }
 
 /* ───────── 업데이트 ───────── */
@@ -294,7 +317,7 @@ function update(dt, now) {
   const near = Math.hypot(inp.x - n.x, inp.y - n.y) < GRAB_R;
 
   if (!inp.down) armed = true;
-  if (inp.down && armed && !grabbed && near && !inBox(inp)) {
+  if (inp.down && armed && !grabbed && near && !boxAt(inp)) {
     grabbed = true; armed = false;
     if (!current) selectSong(songs[0]);
     if (onRecord) { onRecord = false; if (ytReady) player.pauseVideo(); }
@@ -306,8 +329,11 @@ function update(dt, now) {
     else setStatus("LP 위가 아니에요. 핀이 제자리로 돌아갑니다.");
   }
 
-  // 오른쪽 아래 상자에서 더블 핀치 → 다음 곡
-  if (inp.down && !prevDown) tap = !grabbed && inBox(inp) ? { t: now, x: inp.x, y: inp.y } : null;
+  // 오른쪽 아래 상자에서 더블 핀치
+  if (inp.down && !prevDown) {
+    const b = !grabbed && boxAt(inp);
+    tap = b ? { t: now, x: inp.x, y: inp.y, id: b.id } : null;
+  }
   if (tap && (grabbed || now - tap.t > 350 || Math.hypot(inp.x - tap.x, inp.y - tap.y) > 70)) tap = null;
   if (!inp.down && prevDown && tap) { onTap(now, tap); tap = null; }
   prevDown = inp.down;
@@ -351,6 +377,9 @@ function drawRecord() {
   // 드롭 존 표시
   if (grabbed) {
     const hot = onRecordAt(theta);
+    const bw = SNAP * (R_OUT - R_IN);              // 바깥 가장자리 0:00 띠
+    ctx.lineWidth = bw; ctx.strokeStyle = "rgba(226,103,59,.22)";
+    ctx.beginPath(); ctx.arc(0, 0, R_OUT - bw / 2, 0, 7); ctx.stroke();
     ctx.setLineDash([8, 8]); ctx.lineWidth = 2;
     ctx.strokeStyle = hot ? "rgba(226,103,59,.95)" : "rgba(226,103,59,.35)";
     [0.95, 0.42].forEach((k) => { ctx.beginPath(); ctx.arc(0, 0, R * k, 0, 7); ctx.stroke(); });
@@ -423,18 +452,20 @@ function drawTime() {
   ctx.fillText(txt, x, y + 1);
 }
 
-function drawBox() {
-  const now = performance.now(), inp = hand.visible ? hand : mouse;
-  const flash = clamp(1 - (now - boxFlash) / 400, 0, 1), hover = inBox(inp) && !grabbed;
-  ctx.fillStyle = flash > 0 ? `rgba(226,103,59,${0.5 + 0.4 * flash})` : hover ? "rgba(226,103,59,.4)" : "rgba(0,0,0,.4)";
-  ctx.beginPath(); ctx.roundRect(BOX.x, BOX.y, BOX.w, BOX.h, 18); ctx.fill();
-  ctx.strokeStyle = hover ? "#e2673b" : "rgba(255,255,255,.45)"; ctx.lineWidth = 3; ctx.setLineDash([10, 8]);
-  ctx.stroke(); ctx.setLineDash([]);
-  const cx = BOX.x + BOX.w / 2, cy = BOX.y + BOX.h / 2;
-  ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ctx.font = "56px system-ui, sans-serif"; ctx.fillText("⏭", cx, cy - 22);
-  ctx.font = "700 24px system-ui, sans-serif"; ctx.fillText("다음 곡", cx, cy + 28);
-  ctx.font = "14px system-ui, sans-serif"; ctx.fillStyle = "rgba(255,255,255,.7)"; ctx.fillText("두 번 집기", cx, cy + 56);
+function drawBoxes() {
+  const now = performance.now(), inp = hand.visible ? hand : mouse, over = grabbed ? null : boxAt(inp);
+  for (const b of BOXES) {
+    const flash = clamp(1 - (now - (flashAt[b.id] || -1e9)) / 400, 0, 1), hover = over === b;
+    ctx.fillStyle = flash > 0 ? `rgba(226,103,59,${0.5 + 0.4 * flash})` : hover ? "rgba(226,103,59,.4)" : "rgba(0,0,0,.4)";
+    ctx.beginPath(); ctx.roundRect(b.x, b.y, b.w, b.h, 18); ctx.fill();
+    ctx.strokeStyle = hover ? "#e2673b" : "rgba(255,255,255,.45)"; ctx.lineWidth = 3; ctx.setLineDash([10, 8]);
+    ctx.stroke(); ctx.setLineDash([]);
+    const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+    ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.font = "48px system-ui, sans-serif"; ctx.fillText(b.icon, cx, cy - 22);
+    ctx.font = "700 22px system-ui, sans-serif"; ctx.fillText(b.label, cx, cy + 24);
+    ctx.font = "13px system-ui, sans-serif"; ctx.fillStyle = "rgba(255,255,255,.7)"; ctx.fillText("두 번 집기", cx, cy + 48);
+  }
 }
 
 function drawRipples() {
@@ -451,7 +482,7 @@ function render() {
   const bg = ctx.createLinearGradient(0, 0, W, H);
   bg.addColorStop(0, "#4a3220"); bg.addColorStop(1, "#2a1b11");
   ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
-  drawRecord(); drawBox(); drawArm(); drawHand(); drawTime(); drawRipples();
+  drawRecord(); drawBoxes(); drawArm(); drawHand(); drawTime(); drawRipples();
 }
 
 let prev = performance.now();
