@@ -121,11 +121,14 @@ function selectSong(s) {
 window.onYouTubeIframeAPIReady = () => {
   player = new YT.Player("yt", {
     width: "100%", height: "100%",
-    playerVars: { playsinline: 1, rel: 0 },
+    playerVars: { playsinline: 1, rel: 0, controls: 0, disablekb: 1, fs: 0, iv_load_policy: 3, modestbranding: 1 },
     events: {
-      onReady: () => { ytReady = true; if (current) player.cueVideoById(current.id); },
+      onReady: () => { ytReady = true; player.getIframe().tabIndex = -1; if (current) player.cueVideoById(current.id); },
       onStateChange: (e) => {
         playing = e.data === YT.PlayerState.PLAYING || e.data === YT.PlayerState.BUFFERING;
+        // LP 밖에서 재생/정지를 바꾸려는 시도를 되돌림
+        if (e.data === YT.PlayerState.PAUSED && onRecord && !grabbed) player.playVideo();
+        if (e.data === YT.PlayerState.PLAYING && !onRecord && !grabbed) player.pauseVideo();
         if (e.data === YT.PlayerState.PLAYING && pendingSeek !== null) {
           const dur = getDur();
           if (dur > 0) { player.seekTo(Math.min(pendingSeek * dur, dur - 2), true); lastSeekAt = performance.now(); }
@@ -250,6 +253,24 @@ canvas.addEventListener("pointermove", (e) => Object.assign(mouse, toLocal(e)));
 canvas.addEventListener("pointerup", () => (mouse.down = false));
 canvas.addEventListener("pointercancel", () => (mouse.down = false));
 
+/* 유튜브 창 잠금: 광고가 나올 때만 클릭 가능 */
+const ytWrap = document.querySelector(".yt-wrap"), adBtn = document.getElementById("ad-btn");
+let unlockUntil = 0, ytUnlocked = false, lastAdCheck = 0, adAuto = false;
+const setUnlocked = (on) => {
+  ytUnlocked = on;
+  ytWrap.classList.toggle("unlocked", on);
+  adBtn.textContent = on ? "🔓 광고 건너뛰기 가능 (잠시 후 자동 잠금)" : "🔒 잠김 — 광고가 나오면 눌러서 잠금 해제";
+};
+adBtn.onclick = () => { unlockUntil = performance.now() + 15000; };
+function updateLock(now) {
+  if (ytReady && now - lastAdCheck > 500) {           // 재생 중인 영상이 우리가 고른 곡이 아니면 광고로 간주
+    lastAdCheck = now;
+    try { adAuto = playing && !!current && !!player.getVideoData().video_id && player.getVideoData().video_id !== current.id; } catch { adAuto = false; }
+  }
+  const on = adAuto || now < unlockUntil;
+  if (on !== ytUnlocked) setUnlocked(on);
+}
+
 function nextSong() {
   if (songs.length < 2) { setStatus("플레이리스트에 곡이 하나뿐이에요. 곡을 더 추가해 주세요."); return; }
   const i = current ? songs.findIndex((x) => x.id === current.id) : -1;
@@ -264,6 +285,7 @@ function onTap(now, p) {
 /* ───────── 업데이트 ───────── */
 function update(dt, now) {
   detectHand(now);
+  updateLock(now);
   const inp = hand.visible ? hand : mouse;
   const n = needlePos(theta);
   const near = Math.hypot(inp.x - n.x, inp.y - n.y) < GRAB_R;
