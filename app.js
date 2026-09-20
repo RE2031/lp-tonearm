@@ -51,27 +51,57 @@ const hand = { x: 0, y: 0, thumb: null, index: null, down: false, visible: false
 const setStatus = (s) => (statusEl.textContent = s);
 
 /* ───────── 곡 목록 / YouTube ───────── */
-let songs = [
+const DEFAULT_SONGS = [
   { id: "dQw4w9WgXcQ", title: "Rick Astley — Never Gonna Give You Up" },
   { id: "9bZkp7q19f0", title: "PSY — GANGNAM STYLE" },
   { id: "kJQP7kiw5Fk", title: "Luis Fonsi — Despacito" },
   { id: "jfKfPfyJRdk", title: "lofi hip hop radio 📚 (라이브: 위치 이동 불가)" },
 ];
+let songs = DEFAULT_SONGS, results = [];
+try { const j = JSON.parse(localStorage.getItem("yt_songs")); if (Array.isArray(j) && j.length) songs = j; } catch {}
+const saveSongs = () => { try { localStorage.setItem("yt_songs", JSON.stringify(songs)); } catch {} };
 let current = null, labelImg = null, ytReady = false, player = null;
 const songsEl = document.getElementById("songs");
 const nowEl = document.getElementById("now");
 const thumb = (id) => `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
 
+const resultsEl = document.getElementById("results");
+const resultsHead = document.getElementById("results-head");
+
 function renderSongs() {
   songsEl.innerHTML = "";
-  songs.forEach((s) => {
+  songs.forEach((sg, idx) => {
     const li = document.createElement("li");
-    if (current && current.id === s.id) li.className = "on";
-    li.innerHTML = `<img src="${thumb(s.id)}" alt=""><span></span>`;
-    li.querySelector("span").textContent = s.title;
-    li.onclick = () => selectSong(s);
+    if (current && current.id === sg.id) li.className = "on";
+    li.innerHTML = `<img src="${thumb(sg.id)}" alt=""><span></span><button title="삭제">✕</button>`;
+    li.querySelector("span").textContent = `${idx + 1}. ${sg.title}`;
+    li.onclick = () => selectSong(sg);
+    li.querySelector("button").onclick = (e) => {
+      e.stopPropagation();
+      songs = songs.filter((x) => x.id !== sg.id);
+      saveSongs(); renderSongs(); renderResults();
+    };
     songsEl.appendChild(li);
   });
+  document.getElementById("pl-count").textContent = songs.length;
+}
+
+function renderResults() {
+  resultsEl.innerHTML = ""; resultsHead.hidden = !results.length;
+  results.forEach((r) => {
+    const has = songs.some((x) => x.id === r.id);
+    const li = document.createElement("li");
+    li.innerHTML = `<img src="${thumb(r.id)}" alt=""><span></span><button>${has ? "✓" : "＋"}</button>`;
+    li.querySelector("span").textContent = r.title;
+    li.onclick = () => { if (!has) addSong(r); };
+    resultsEl.appendChild(li);
+  });
+}
+
+function addSong(item) {
+  if (!songs.some((x) => x.id === item.id)) songs = [...songs, item];   // 뒤에 추가 = 재생 순서
+  saveSongs(); renderSongs(); renderResults();
+  setStatus(`플레이리스트에 추가: ${item.title} (총 ${songs.length}곡)`);
 }
 
 const getDur = () => (ytReady && player.getDuration ? player.getDuration() || 0 : 0);
@@ -127,7 +157,6 @@ function startPlayback(p) {
 }
 
 /* 곡 추가 / 검색 */
-const parseId = (t) => (t.match(/(?:v=|youtu\.be\/|embed\/|shorts\/)([\w-]{11})/) || t.match(/^([\w-]{11})$/) || [])[1];
 const keyEl = document.getElementById("api-key");
 try { keyEl.value = localStorage.getItem("yt_key") || ""; } catch {}
 keyEl.onchange = () => { try { localStorage.setItem("yt_key", keyEl.value.trim()); } catch {} };
@@ -137,26 +166,29 @@ document.getElementById("add-form").onsubmit = async (e) => {
   const input = document.getElementById("add-input");
   const text = input.value.trim();
   if (!text) return;
-  const id = parseId(text);
-  if (id) {
-    let title = id;
+  const ids = [...new Set([...text.matchAll(/(?:v=|youtu\.be\/|embed\/|shorts\/)([\w-]{11})/g)].map((m) => m[1]))];
+  if (!ids.length && /^[\w-]{11}$/.test(text)) ids.push(text);
+  if (ids.length) {                                   // 링크(여러 개 가능) → 플레이리스트에 추가
+    const items = await Promise.all(ids.map(async (id) => {
+      let title = id;
+      try { title = (await (await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`)).json()).title; } catch {}
+      return { id, title };
+    }));
+    items.forEach((it) => { if (!songs.some((x) => x.id === it.id)) songs = [...songs, it]; });
+    saveSongs(); renderSongs(); renderResults();
+    selectSong(songs.find((x) => x.id === items[0].id));
+    setStatus(`${items.length}곡을 플레이리스트에 추가했어요 (총 ${songs.length}곡)`);
+  } else if (keyEl.value.trim()) {                    // 검색 → 결과 목록 (＋ 로 담기)
     try {
-      const r = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`);
-      title = (await r.json()).title;
-    } catch {}
-    songs = [{ id, title }, ...songs.filter((x) => x.id !== id)];
-    renderSongs(); selectSong(songs[0]);
-  } else if (keyEl.value.trim()) {
-    try {
-      const u = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&maxResults=8&q=${encodeURIComponent(text)}&key=${keyEl.value.trim()}`;
+      const u = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&maxResults=10&q=${encodeURIComponent(text)}&key=${keyEl.value.trim()}`;
       const j = await (await fetch(u)).json();
       if (j.error) throw new Error(j.error.message);
-      const div = document.createElement("div"); // HTML 엔티티 해제
-      songs = j.items.map((i) => { div.innerHTML = i.snippet.title; return { id: i.id.videoId, title: div.textContent }; });
-      renderSongs();
+      const div = document.createElement("div");
+      results = j.items.map((i) => { div.innerHTML = i.snippet.title; return { id: i.id.videoId, title: div.textContent }; });
+      renderResults(); setStatus("검색 결과에서 ＋ 를 눌러 플레이리스트에 담으세요.");
     } catch (err) { setStatus("검색 실패: " + err.message); }
   } else {
-    setStatus("검색하려면 API 키가 필요해요. 유튜브 링크를 붙여넣어도 됩니다.");
+    setStatus("검색하려면 API 키가 필요해요. 유튜브 링크를 붙여넣으면 바로 추가됩니다 (여러 개도 가능).");
   }
   input.value = "";
 };
@@ -219,6 +251,7 @@ canvas.addEventListener("pointerup", () => (mouse.down = false));
 canvas.addEventListener("pointercancel", () => (mouse.down = false));
 
 function nextSong() {
+  if (songs.length < 2) { setStatus("플레이리스트에 곡이 하나뿐이에요. 곡을 더 추가해 주세요."); return; }
   const i = current ? songs.findIndex((x) => x.id === current.id) : -1;
   selectSong(songs[(i + 1) % songs.length]);
   setStatus("⏭ 다음 곡: " + current.title);

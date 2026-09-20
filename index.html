@@ -25,15 +25,19 @@
 
     <h2>곡 추가 · 검색</h2>
     <form id="add-form">
-      <input id="add-input" placeholder="유튜브 링크 붙여넣기 또는 검색어" autocomplete="off">
+      <input id="add-input" placeholder="유튜브 링크(여러 개 가능) 또는 검색어" autocomplete="off">
       <button>추가</button>
     </form>
     <details>
       <summary>YouTube API 키 (검색용, 선택)</summary>
       <input id="api-key" placeholder="YouTube Data API v3 key" autocomplete="off">
-      <small>키가 있으면 검색어로 곡을 찾고, 없으면 링크만 추가돼요. 키는 이 브라우저에만 저장됩니다.</small>
+      <small>키가 있으면 검색어로 곡을 찾고, 없으면 링크만 추가돼요. 플레이리스트는 이 브라우저에 저장됩니다. 키는 이 브라우저에만 저장됩니다.</small>
     </details>
 
+    <h2 id="results-head" hidden>검색 결과 (누르면 추가)</h2>
+    <ul id="results" class="songs"></ul>
+
+    <h2>플레이리스트 (<span id="pl-count">0</span>곡)</h2>
     <ul id="songs" class="songs"></ul>
 
     <div class="yt-wrap"><div id="yt"></div></div>
