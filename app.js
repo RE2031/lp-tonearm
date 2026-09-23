@@ -54,6 +54,7 @@ let theta = T_REST, grabbed = false, armed = true, onRecord = false, lift = 0;
 let spin = 0, angle = 0, playing = false;
 let prevDown = false, tap = null, lastTap = 0;
 let pendingSeek = null, lastSeekAt = 0, lastTapBox = null;
+let lastStartPlaybackAt = 0;
 const flashAt = {};
 const ripples = [];
 const mouse = { x: 0, y: 0, down: false };
@@ -65,14 +66,23 @@ const DEFAULT_SONGS = [
   { id: "dQw4w9WgXcQ", title: "Rick Astley — Never Gonna Give You Up" },
   { id: "9bZkp7q19f0", title: "PSY — GANGNAM STYLE" },
   { id: "kJQP7kiw5Fk", title: "Luis Fonsi — Despacito" },
-  { id: "jfKfPfyJRdk", title: "lofi hip hop radio 📚 (라이브: 위치 이동 불가)" },
+  { id: "5qap5aO4i9A", title: "Lofi Girl — beats to relax/study to 📚 (라이브)" },
 ];
 let songs = DEFAULT_SONGS, results = [];
-try { const j = JSON.parse(localStorage.getItem("yt_songs")); if (Array.isArray(j) && j.length) songs = j; } catch {}
+try {
+  const j = JSON.parse(localStorage.getItem("yt_songs"));
+  if (Array.isArray(j) && j.length) {
+    songs = j.map(s => s.id === "jfKfPfyJRdk" ? { id: "5qap5aO4i9A", title: "Lofi Girl — beats to relax/study to 📚 (라이브)" } : s);
+  }
+} catch {}
 const saveSongs = () => { try { localStorage.setItem("yt_songs", JSON.stringify(songs)); } catch {} };
-let current = null, labelImg = null, ytReady = false, player = null;
+
+let current = songs[0], labelImg = new Image(), ytReady = false, player = null;
+labelImg.src = `https://i.ytimg.com/vi/${current.id}/hqdefault.jpg`;
+
 const songsEl = document.getElementById("songs");
 const nowEl = document.getElementById("now");
+nowEl.textContent = current.title;
 const thumb = (id) => `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
 
 const isTopic = (name) => /- Topic$/.test(name || "");
@@ -87,7 +97,7 @@ function renderSongs() {
     li.innerHTML = `<img src="${thumb(sg.id)}" alt=""><span></span><button title="삭제">✕</button>`;
     li.querySelector("span").textContent = `${idx + 1}. ${sg.topic === false ? "⚠ " : ""}${sg.title}`;
     if (sg.topic === false) li.title = "Topic 영상이 아니라 광고가 나올 수 있어요";
-    li.onclick = () => selectSong(sg);
+    li.onclick = () => { unlockAudio(); selectSong(sg); };
     li.querySelector("button").onclick = (e) => {
       e.stopPropagation();
       songs = songs.filter((x) => x.id !== sg.id);
@@ -105,7 +115,7 @@ function renderResults() {
     const li = document.createElement("li");
     li.innerHTML = `<img src="${thumb(r.id)}" alt=""><span></span><button>${has ? "✓" : "＋"}</button>`;
     li.querySelector("span").textContent = r.title;
-    li.onclick = () => { if (!has) addSong(r); };
+    li.onclick = () => { unlockAudio(); if (!has) addSong(r); };
     resultsEl.appendChild(li);
   });
 }
@@ -116,7 +126,7 @@ function addSong(item) {
   setStatus(`플레이리스트에 추가: ${item.title} (총 ${songs.length}곡)`);
 }
 
-const getDur = () => (ytReady && player.getDuration ? player.getDuration() || 0 : 0);
+const getDur = () => (ytReady && player && player.getDuration ? player.getDuration() || 0 : 0);
 
 function selectSong(s) {
   current = s;
@@ -125,19 +135,67 @@ function selectSong(s) {
   labelImg = new Image();
   labelImg.src = thumb(s.id);
   renderSongs();
-  if (!ytReady) return;
-  if (onRecord) player.loadVideoById(s.id);
-  else { player.cueVideoById(s.id); setStatus("곡을 골랐어요. 핀을 LP 위에 올려보세요."); }
+  if (!ytReady || !player) return;
+  if (onRecord) {
+    if (player.loadVideoById) player.loadVideoById(s.id);
+  } else {
+    if (player.cueVideoById) player.cueVideoById(s.id);
+    setStatus("곡을 골랐어요. 핀을 LP 위에 올려보세요.");
+  }
 }
 
-window.onYouTubeIframeAPIReady = () => {
+/* ───────── 브라우저 오디오 언락 ───────── */
+let audioUnlocked = false;
+function unlockAudio() {
+  if (audioUnlocked || !ytReady || !player) return;
+  try {
+    // 사용자 제스처 이벤트 내에서 playVideo를 호출하여 iframe의 자동재생 제한을 해제
+    player.playVideo();
+    if (!onRecord) {
+      player.pauseVideo();
+    }
+    audioUnlocked = true;
+  } catch (err) {}
+}
+
+window.addEventListener("pointerdown", unlockAudio, { passive: true });
+window.addEventListener("touchstart", unlockAudio, { passive: true });
+
+function initPlayer() {
+  if (player) return;
   player = new YT.Player("yt", {
+    host: "https://www.youtube-nocookie.com",
+    videoId: current.id,
     width: "100%", height: "100%",
-    playerVars: { playsinline: 1, rel: 0, controls: 0, disablekb: 1, fs: 0, iv_load_policy: 3, modestbranding: 1 },
+    playerVars: {
+      playsinline: 1,
+      rel: 0,
+      controls: 0,
+      disablekb: 1,
+      fs: 0,
+      iv_load_policy: 3,
+      modestbranding: 1,
+      origin: window.location.origin,
+      enablejsapi: 1
+    },
     events: {
-      onReady: () => { ytReady = true; player.getIframe().tabIndex = -1; if (current) player.cueVideoById(current.id); },
+      onReady: () => {
+        ytReady = true;
+        try {
+          const iframe = player.getIframe();
+          if (iframe) {
+            iframe.tabIndex = -1;
+            iframe.setAttribute("referrerpolicy", "strict-origin-when-cross-origin");
+            iframe.setAttribute("allow", "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share");
+          }
+        } catch (e) {}
+        if (current && player.cueVideoById) {
+          player.cueVideoById(current.id);
+        }
+      },
       onStateChange: (e) => {
         playing = e.data === YT.PlayerState.PLAYING || e.data === YT.PlayerState.BUFFERING;
+        if (e.data === YT.PlayerState.PLAYING) audioUnlocked = true;
         // LP 밖에서 재생/정지를 바꾸려는 시도를 되돌림
         if (e.data === YT.PlayerState.PAUSED && onRecord && !grabbed) player.playVideo();
         if (e.data === YT.PlayerState.PLAYING && !onRecord && !grabbed) player.pauseVideo();
@@ -148,25 +206,49 @@ window.onYouTubeIframeAPIReady = () => {
         }
         if (e.data === YT.PlayerState.ENDED) { onRecord = false; setStatus("곡이 끝났어요. 핀이 제자리로 돌아갑니다."); }
       },
-      onError: () => { onRecord = false; setStatus("이 영상은 재생할 수 없어요 (퍼가기 제한). 다른 곡을 골라보세요."); },
+      onError: (e) => {
+        onRecord = false;
+        let msg = "이 영상은 재생할 수 없어요 (퍼가기 제한). 다른 곡을 골라보세요.";
+        if (e.data === 150 || e.data === 101) msg = "퍼가기가 제한된 음원/영상입니다. 다른 곡을 선택해 주세요.";
+        else if (e.data === 2) msg = "유효하지 않은 영상 링크입니다.";
+        setStatus(msg);
+      },
     },
   });
-};
-const s = document.createElement("script");
-s.src = "https://www.youtube.com/iframe_api";
-document.head.appendChild(s);
+}
+
+if (window.YT && window.YT.Player) {
+  initPlayer();
+} else {
+  window.onYouTubeIframeAPIReady = initPlayer;
+  if (!document.querySelector('script[src*="youtube.com/iframe_api"]')) {
+    const s = document.createElement("script");
+    s.src = "https://www.youtube.com/iframe_api";
+    document.head.appendChild(s);
+  }
+}
 
 function startPlayback(p) {
   if (!current) selectSong(songs[0]);
-  if (!ytReady) { setStatus("플레이어 로딩 중… 잠시 후 다시 올려주세요."); onRecord = false; return; }
-  const dur = getDur(), same = player.getVideoData().video_id === current.id;
+  if (!ytReady || !player) { setStatus("플레이어 로딩 중… 잠시 후 다시 올려주세요."); onRecord = false; return; }
+  lastStartPlaybackAt = performance.now();
+  const dur = getDur();
+  const vData = player.getVideoData ? player.getVideoData() : null;
+  const same = vData && vData.video_id === current.id;
   if (same && (dur > 0 || p === 0)) {
-    player.seekTo(p === 0 ? 0 : Math.min(p * dur, dur - 2), true); lastSeekAt = performance.now(); pendingSeek = null;
+    player.seekTo(p === 0 ? 0 : Math.min(p * dur, dur - 2), true);
+    lastSeekAt = performance.now();
+    pendingSeek = null;
     player.playVideo();
     setStatus(p === 0 ? "♪ 처음부터 재생 — 핀을 집어 올리면 멈춰요." : `♪ ${fmt(p * dur)} 부터 재생 — 핀을 집어 올리면 멈춰요.`);
   } else {
     pendingSeek = p > 0 ? p : null;
-    if (same) player.playVideo(); else player.loadVideoById(current.id);
+    if (same) {
+      player.playVideo();
+    } else {
+      const targetSec = p === 0 ? 0 : (dur > 0 ? Math.min(p * dur, dur - 2) : 0);
+      player.loadVideoById({ videoId: current.id, startSeconds: targetSec });
+    }
     setStatus("♪ 재생 중 — 핀을 집어 올리면 멈춰요.");
   }
 }
@@ -178,6 +260,7 @@ keyEl.onchange = () => { try { localStorage.setItem("yt_key", keyEl.value.trim()
 
 document.getElementById("add-form").onsubmit = async (e) => {
   e.preventDefault();
+  unlockAudio();
   const input = document.getElementById("add-input");
   const text = input.value.trim();
   if (!text) return;
@@ -219,6 +302,7 @@ const camBtn = document.getElementById("cam-btn");
 let landmarker = null, lastVideoTime = -1;
 
 camBtn.onclick = async () => {
+  unlockAudio();
   camBtn.disabled = true; camBtn.textContent = "불러오는 중…";
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: "user" } });
@@ -265,9 +349,24 @@ const toLocal = (e) => {
   const r = canvas.getBoundingClientRect();
   return { x: ((e.clientX - r.left) / r.width) * W, y: ((e.clientY - r.top) / r.height) * H };
 };
-canvas.addEventListener("pointerdown", (e) => { Object.assign(mouse, toLocal(e), { down: true }); canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener("pointerdown", (e) => {
+  unlockAudio();
+  Object.assign(mouse, toLocal(e), { down: true });
+  canvas.setPointerCapture(e.pointerId);
+});
 canvas.addEventListener("pointermove", (e) => Object.assign(mouse, toLocal(e)));
-canvas.addEventListener("pointerup", () => (mouse.down = false));
+canvas.addEventListener("pointerup", (e) => {
+  mouse.down = false;
+  if (!hand.visible && grabbed) {
+    grabbed = false;
+    if (onRecordAt(theta)) {
+      onRecord = true;
+      startPlayback(progressAt(theta));
+    } else {
+      setStatus("LP 위가 아니에요. 핀이 제자리로 돌아갑니다.");
+    }
+  }
+});
 canvas.addEventListener("pointercancel", () => (mouse.down = false));
 
 /* 유튜브 창 잠금: 광고가 나올 때만 클릭 가능 */
@@ -278,9 +377,17 @@ const setUnlocked = (on) => {
   ytWrap.classList.toggle("unlocked", on);
   adBtn.textContent = on ? "🔓 광고 건너뛰기 가능 (잠시 후 자동 잠금)" : "🔒 잠김 — 광고가 나오면 눌러서 잠금 해제";
 };
-adBtn.onclick = () => { unlockUntil = performance.now() + 15000; };
+adBtn.onclick = () => { unlockAudio(); unlockUntil = performance.now() + 15000; };
+const ytShield = document.getElementById("yt-shield");
+ytShield.onclick = () => {
+  unlockAudio();
+  if (onRecord && !playing && ytReady && player) {
+    player.playVideo();
+  }
+};
+
 function updateLock(now) {
-  if (ytReady && now - lastAdCheck > 500) {           // 재생 중인 영상이 우리가 고른 곡이 아니면 광고로 간주
+  if (ytReady && player && player.getVideoData && now - lastAdCheck > 500) {
     lastAdCheck = now;
     try { adAuto = playing && !!current && !!player.getVideoData().video_id && player.getVideoData().video_id !== current.id; } catch { adAuto = false; }
   }
@@ -320,13 +427,20 @@ function update(dt, now) {
   if (inp.down && armed && !grabbed && near && !boxAt(inp)) {
     grabbed = true; armed = false;
     if (!current) selectSong(songs[0]);
-    if (onRecord) { onRecord = false; if (ytReady) player.pauseVideo(); }
+    if (onRecord) { onRecord = false; if (ytReady && player) player.pauseVideo(); }
     setStatus("핀을 잡았어요. 중심 쪽 끝까지 가서 놓으면 처음부터, 바깥쪽에 놓으면 그 위치부터 재생돼요.");
   }
-  if (grabbed && !inp.down) {
+
+  // hand(카메라)로 놓았을 때의 처리 (마우스는 pointerup에서 즉시 처리)
+  if (grabbed && !inp.down && hand.visible) {
     grabbed = false;
     if (onRecordAt(theta)) { onRecord = true; startPlayback(progressAt(theta)); }
     else setStatus("LP 위가 아니에요. 핀이 제자리로 돌아갑니다.");
+  }
+
+  // 브라우저 자동재생 차단 감지 (1.5초 이상 지났는데 아직 playing이 아닐 때 사용자 안내)
+  if (onRecord && !playing && now - lastStartPlaybackAt > 1500 && now - lastStartPlaybackAt < 12000) {
+    setStatus("소리를 재생하려면 화면 아무 곳이나 한 번 클릭해 주세요 🔊");
   }
 
   // 오른쪽 아래 상자에서 더블 핀치
@@ -344,9 +458,9 @@ function update(dt, now) {
     theta += (target - theta) * Math.min(1, dt * 20);
   } else {
     let target = onRecord ? theta : T_REST;
-    if (onRecord && pendingSeek === null && now - lastSeekAt > 1200) {
+    if (onRecord && pendingSeek === null && now - lastSeekAt > 1200 && ytReady && player) {
       const dur = getDur();
-      if (dur > 0) target = thetaForProgress(clamp(player.getCurrentTime() / dur, 0, 1));
+      if (dur > 0 && player.getCurrentTime) target = thetaForProgress(clamp(player.getCurrentTime() / dur, 0, 1));
     }
     theta += (target - theta) * Math.min(1, dt * 6);
   }
@@ -442,7 +556,7 @@ function drawTime() {
   if (grabbed) {
     hot = onRecordAt(theta);
     txt = !hot ? "LP 위에 올려보세요" : inStartZone(theta) ? "↺ 처음부터 재생" : dur > 0 ? `${fmt(progressAt(theta) * dur)} / ${fmt(dur)}` : "LIVE";
-  } else txt = dur > 0 ? `${fmt(player.getCurrentTime())} / ${fmt(dur)}` : "LIVE";
+  } else txt = dur > 0 && player && player.getCurrentTime ? `${fmt(player.getCurrentTime())} / ${fmt(dur)}` : "LIVE";
   const n = needlePos(theta);
   ctx.font = "600 22px system-ui, sans-serif";
   const w = ctx.measureText(txt).width + 28, x = clamp(n.x - 14, w / 2 + 8, W - w / 2 - 8), y = Math.min(n.y + 56, H - 26);
