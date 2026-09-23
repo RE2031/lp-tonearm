@@ -9,7 +9,7 @@ const D = Math.hypot(C.x - P.x, C.y - P.y);
 const L = D * 0.9;                      // 암 길이
 const A0 = Math.atan2(C.y - P.y, C.x - P.x);
 const T_REST = 0.85, T_MIN = 0.05, T_MAX = 0.95;   // 암 각도(θ) 범위
-const GRAB_R = 110;
+const GRAB_R = 135;
 const BOXES = [                                    // 오른쪽 아래 버튼 상자 (두 번 집기)
   { id: "restart", x: 840, y: 375, w: 145, h: 140, icon: "↺", label: "처음으로" },
   { id: "next", x: 840, y: 530, w: 145, h: 140, icon: "⏭", label: "다음 곡" },
@@ -308,11 +308,11 @@ camBtn.onclick = async () => {
     const stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }
     });
+    video.parentElement.hidden = false;
     video.muted = true;
     video.playsInline = true;
     video.srcObject = stream;
     await video.play();
-    video.parentElement.hidden = false;
     const fileset = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
     const opts = (delegate) => ({
       baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task", delegate },
@@ -321,10 +321,17 @@ camBtn.onclick = async () => {
     try { landmarker = await HandLandmarker.createFromOptions(fileset, opts("GPU")); }
     catch { landmarker = await HandLandmarker.createFromOptions(fileset, opts("CPU")); }
     camBtn.textContent = "📷 카메라 켜짐";
-    setStatus("손을 보여주세요. 엄지+검지를 붙여(핀치) 핀 끝을 집고, 손을 움직여 LP 위에서 놓으세요.");
+    setStatus("손을 보여주세요. 엄지+검지를 맞대어(핀치) 핀 끝을 집고, LP 위에서 놓으세요.");
   } catch (err) {
+    video.parentElement.hidden = true;
     camBtn.disabled = false; camBtn.textContent = "📷 카메라 켜기";
-    setStatus("카메라를 쓸 수 없어요: " + err.message + " (localhost 또는 https 로 열어야 해요)");
+    let msg = err.message;
+    if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+      msg = "카메라(웹캠) 장치가 없습니다. 마우스로 톤암(핀)을 끌어 올려보세요!";
+    } else if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+      msg = "카메라 권한이 거부되었습니다. 주소창 왼쪽 자물쇠 아이콘에서 카메라 권한을 허용해 주세요.";
+    }
+    setStatus("카메라를 쓸 수 없어요: " + msg);
   }
 };
 
@@ -342,7 +349,7 @@ function detectHand(now) {
   const t = toCanvas(lm[4]), i = toCanvas(lm[8]);
   const size = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y) || 1;
   const ratio = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y) / size;
-  hand.down = hand.down ? ratio < 0.42 : ratio < 0.28;    // 히스테리시스
+  hand.down = hand.down ? ratio < 0.48 : ratio < 0.35;    // 히스테리시스 (핀치 인식 감도 개선)
   const px = (t.x + i.x) / 2, py = (t.y + i.y) / 2;
   const k = hand.visible ? 0.55 : 1;
   hand.x += (px - hand.x) * k; hand.y += (py - hand.y) * k;
