@@ -164,7 +164,7 @@ window.addEventListener("touchstart", unlockAudio, { passive: true });
 function initPlayer() {
   if (player) return;
   player = new YT.Player("yt", {
-    host: "https://www.youtube-nocookie.com",
+    host: "https://www.youtube.com",
     videoId: current.id,
     width: "100%", height: "100%",
     playerVars: {
@@ -305,8 +305,13 @@ camBtn.onclick = async () => {
   unlockAudio();
   camBtn.disabled = true; camBtn.textContent = "불러오는 중…";
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: "user" } });
-    video.srcObject = stream; await video.play();
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }
+    });
+    video.muted = true;
+    video.playsInline = true;
+    video.srcObject = stream;
+    await video.play();
     video.parentElement.hidden = false;
     const fileset = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
     const opts = (delegate) => ({
