@@ -32,3 +32,17 @@ details{font-size:13px;color:var(--dim)}details input{margin:8px 0 4px}small{dis
 .yt-wrap.unlocked #yt-shield{display:none}
 .yt-wrap.unlocked{outline:2px solid var(--accent)}
 #ad-btn{font-size:12px;color:var(--dim)}
+.controls-row{display:flex;gap:8px}
+.controls-row button{flex:1;padding:10px 8px;font-size:13px;white-space:nowrap}
+button.secondary{background:#2a221c;border-color:var(--line);color:var(--fg)}
+button.secondary:hover{border-color:var(--accent)}
+.modal-overlay[hidden]{display:none}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:999;padding:16px}
+.modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;max-width:440px;width:100%;box-shadow:0 12px 36px rgba(0,0,0,.7)}
+.modal h3{margin:0 0 12px;font-size:17px;color:var(--fg)}
+.modal-body{margin:0 0 20px;font-size:13px;line-height:1.6;color:var(--dim)}
+.modal-body strong{color:var(--fg)}
+.modal-body p{margin:0 0 10px}
+.modal-body ul{margin:8px 0;padding-left:18px}
+.modal-body li{margin-bottom:6px}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end}

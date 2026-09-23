@@ -5,20 +5,23 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <title>Tonearm — 손으로 올리는 LP 플레이어</title>
-<link rel="stylesheet" href="style.css?v=2">
+<link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
 <main>
   <section class="stage">
     <canvas id="stage" width="1000" height="700"></canvas>
-    <div id="status" class="status">톤암(핀)을 마우스로 끌거나, 카메라를 켜고 엄지·검지로 집어서 LP 위에 올려보세요.</div>
+    <div id="status" class="status">톤암(핀)을 마우스로 끌거나 LP판을 클릭해 보세요. (웹캠이 있으면 카메라 제스처 가능)</div>
   </section>
 
   <aside class="panel">
     <h1>Tonearm</h1>
-    <p class="sub">엄지와 검지로 핀을 집어 LP 위에 올리면 재생돼요. 판 가장자리·중심 쪽에 놓으면 처음부터, 그 사이는 놓는 위치가 재생 위치! 오른쪽 아래 상자를 두 번 집으면 ↺ 처음으로 / ⏭ 다음 곡.</p>
+    <p class="sub">LP판을 클릭하거나 톤암(핀)을 마우스로 끌어 올리면 재생돼요. 웹캠이 있는 기기에서는 카메라를 켜고 엄지·검지 제스처로 집어 올릴 수 있습니다.</p>
 
-    <button id="cam-btn" class="primary">📷 카메라 켜기</button>
+    <div class="controls-row">
+      <button id="toggle-play-btn" class="primary">▶ 톤암 올려서 재생</button>
+      <button id="cam-btn" class="secondary">📷 카메라 켜기</button>
+    </div>
     <div class="cam-wrap" hidden><video id="cam" playsinline muted></video></div>
 
     <h2>지금 곡</h2>
@@ -45,6 +48,18 @@
     <button id="ad-btn" type="button">🔒 잠김 — 광고가 나오면 눌러서 잠금 해제</button>
   </aside>
 </main>
-<script type="module" src="app.js?v=2"></script>
+
+<div id="cam-modal" class="modal-overlay" hidden>
+  <div class="modal">
+    <h3 id="cam-modal-title">📷 카메라 안내</h3>
+    <div id="cam-modal-body" class="modal-body"></div>
+    <div class="modal-actions">
+      <button id="modal-play-btn" class="primary">▶ 마우스로 재생하기</button>
+      <button id="modal-close-btn" class="secondary">닫기</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="app.js?v=3"></script>
 </body>
 </html>

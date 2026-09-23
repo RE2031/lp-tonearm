@@ -23,11 +23,14 @@ const onRecordAt = (t) => {
 };
 const R_OUT = R * 0.95, R_IN = R * 0.42;       // R_IN 안쪽(중심부) = 처음부터, 바깥쪽 구간 = 위치 비례
 const SNAP = 0.10;                               // 바깥 가장자리 10% 구간 = 0:00 자석
-const progressAt = (t) => {
-  const n = needlePos(t), r = Math.hypot(n.x - C.x, n.y - C.y);
+const progressForRadius = (r) => {
   if (r < R_IN) return 0;                         // 중심부 → 처음부터
   const q = (R_OUT - r) / (R_OUT - R_IN);         // 바깥 0 ~ 안쪽 1
   return q <= SNAP ? 0 : clamp((q - SNAP) / (1 - SNAP), 0, 0.98);
+};
+const progressAt = (t) => {
+  const n = needlePos(t), r = Math.hypot(n.x - C.x, n.y - C.y);
+  return progressForRadius(r);
 };
 const inStartZone = (t) => progressAt(t) === 0;
 const thetaForProgress = (p) => {
@@ -205,6 +208,7 @@ function initPlayer() {
           pendingSeek = null;
         }
         if (e.data === YT.PlayerState.ENDED) { onRecord = false; setStatus("곡이 끝났어요. 핀이 제자리로 돌아갑니다."); }
+        updatePlayButton();
       },
       onError: (e) => {
         onRecord = false;
@@ -212,6 +216,7 @@ function initPlayer() {
         if (e.data === 150 || e.data === 101) msg = "퍼가기가 제한된 음원/영상입니다. 다른 곡을 선택해 주세요.";
         else if (e.data === 2) msg = "유효하지 않은 영상 링크입니다.";
         setStatus(msg);
+        updatePlayButton();
       },
     },
   });
@@ -296,23 +301,146 @@ document.getElementById("add-form").onsubmit = async (e) => {
   input.value = "";
 };
 
-/* ───────── 손 인식 ───────── */
+/* ───────── 재생 / 정지 버튼 ───────── */
+const togglePlayBtn = document.getElementById("toggle-play-btn");
+
+function updatePlayButton() {
+  if (!togglePlayBtn) return;
+  if (onRecord && playing) {
+    togglePlayBtn.textContent = "⏸ 톤암 내리기 (정지)";
+    togglePlayBtn.classList.remove("primary");
+    togglePlayBtn.classList.add("secondary");
+  } else {
+    togglePlayBtn.textContent = "▶ 톤암 올려서 재생";
+    togglePlayBtn.classList.add("primary");
+    togglePlayBtn.classList.remove("secondary");
+  }
+}
+
+function togglePlay(forcePlay = false) {
+  unlockAudio();
+  if (onRecord && !forcePlay) {
+    onRecord = false;
+    if (ytReady && player) player.pauseVideo();
+    setStatus("톤암을 내렸어요 (정지).");
+  } else {
+    onRecord = true;
+    theta = thetaForProgress(0);
+    startPlayback(0);
+  }
+  updatePlayButton();
+}
+
+if (togglePlayBtn) {
+  togglePlayBtn.onclick = () => togglePlay();
+}
+
+/* ───────── 손 인식 (웹캠) & 안내 모달 ───────── */
 const video = document.getElementById("cam");
 const camBtn = document.getElementById("cam-btn");
 let landmarker = null, lastVideoTime = -1;
 
+const modalOverlay = document.getElementById("cam-modal");
+const modalTitle = document.getElementById("cam-modal-title");
+const modalBody = document.getElementById("cam-modal-body");
+const modalPlayBtn = document.getElementById("modal-play-btn");
+const modalCloseBtn = document.getElementById("modal-close-btn");
+
+function showModal(title, htmlContent, showPlay = true) {
+  if (!modalOverlay) return;
+  modalTitle.textContent = title;
+  modalBody.innerHTML = htmlContent;
+  if (modalPlayBtn) modalPlayBtn.hidden = !showPlay;
+  modalOverlay.hidden = false;
+}
+function closeModal() {
+  if (modalOverlay) modalOverlay.hidden = true;
+}
+if (modalCloseBtn) modalCloseBtn.onclick = closeModal;
+if (modalPlayBtn) {
+  modalPlayBtn.onclick = () => {
+    closeModal();
+    togglePlay(true);
+  };
+}
+if (modalOverlay) {
+  modalOverlay.onclick = (e) => {
+    if (e.target === modalOverlay) closeModal();
+  };
+}
+
+const isInApp = /KAKAOTALK|Instagram|NAVER|Line|FB_IAB|FB4A|FBAN/i.test(navigator.userAgent);
+
+// 페이지 로드 시 카메라 장치 사전 점검
+async function checkCameraDevice() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+  try {
+    const devs = await navigator.mediaDevices.enumerateDevices();
+    const hasCam = devs.some((d) => d.kind === "videoinput");
+    if (!hasCam && camBtn) {
+      camBtn.textContent = "📷 카메라 없음 (PC)";
+      camBtn.title = "현재 컴퓨터에 웹캠이 연결되어 있지 않습니다. (마우스로 조작 가능)";
+    }
+  } catch {}
+}
+checkCameraDevice();
+
 camBtn.onclick = async () => {
   unlockAudio();
-  camBtn.disabled = true; camBtn.textContent = "불러오는 중…";
+
+  // 브라우저 미지원 체크
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showModal(
+      "📷 카메라 미지원 브라우저",
+      `<p>현재 브라우저에서는 웹캠/카메라 기능을 지원하지 않습니다.</p>` +
+      (isInApp
+        ? `<p><strong>카카오톡 / 인앱 브라우저</strong>에서는 카메라 접근이 기본 차단되어 있습니다.<br>우측 상단 메뉴에서 <strong>'다른 브라우저로 열기 (Safari / Chrome)'</strong>를 선택해 주세요.</p>`
+        : `<p>최신 버전의 <strong>Chrome, Edge, Safari</strong> 브라우저를 이용해 주세요.</p>`) +
+      `<p>마우스로도 LP판이나 톤암을 움직여 모든 기능을 즐기실 수 있습니다.</p>`
+    );
+    return;
+  }
+
+  // 장치 목록 사전 확인
+  if (navigator.mediaDevices.enumerateDevices) {
+    try {
+      const devs = await navigator.mediaDevices.enumerateDevices();
+      const hasCam = devs.some((d) => d.kind === "videoinput");
+      if (!hasCam) {
+        showModal(
+          "📷 카메라(웹캠) 장치가 없습니다",
+          `<p>현재 사용 중인 컴퓨터에 <strong>연결된 카메라(웹캠)가 없습니다.</strong></p>` +
+          `<ul>` +
+            `<li><strong>마우스로 바로 즐기기:</strong> 화면의 톤암(핀)을 끌어다 놓거나 LP판을 클릭하면 즉시 음악이 재생됩니다.</li>` +
+            `<li><strong>손 제스처(카메라) 즐기기:</strong> 웹캠이 내장된 <strong>노트북</strong>이나 <strong>스마트폰/태블릿</strong>(Safari 또는 Chrome)에서 접속해 보세요.</li>` +
+          `</ul>`
+        );
+        setStatus("카메라 장치가 없습니다. 마우스로 LP판을 클릭하거나 톤암을 끌어보세요!");
+        return;
+      }
+    } catch {}
+  }
+
+  camBtn.disabled = true;
+  camBtn.textContent = "카메라 연결 중…";
+
+  let stream = null;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }
-    });
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }
+      });
+    } catch (e) {
+      stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    }
+
     video.parentElement.hidden = false;
     video.muted = true;
     video.playsInline = true;
     video.srcObject = stream;
     await video.play();
+
+    camBtn.textContent = "AI 모델 로딩 중…";
     const fileset = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
     const opts = (delegate) => ({
       baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task", delegate },
@@ -320,18 +448,36 @@ camBtn.onclick = async () => {
     });
     try { landmarker = await HandLandmarker.createFromOptions(fileset, opts("GPU")); }
     catch { landmarker = await HandLandmarker.createFromOptions(fileset, opts("CPU")); }
-    camBtn.textContent = "📷 카메라 켜짐";
+
+    camBtn.disabled = false;
+    camBtn.textContent = "📷 카메라 켜짐 (제스처 사용 중)";
     setStatus("손을 보여주세요. 엄지+검지를 맞대어(핀치) 핀 끝을 집고, LP 위에서 놓으세요.");
   } catch (err) {
-    video.parentElement.hidden = true;
-    camBtn.disabled = false; camBtn.textContent = "📷 카메라 켜기";
-    let msg = err.message;
-    if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
-      msg = "카메라(웹캠) 장치가 없습니다. 마우스로 톤암(핀)을 끌어 올려보세요!";
-    } else if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
-      msg = "카메라 권한이 거부되었습니다. 주소창 왼쪽 자물쇠 아이콘에서 카메라 권한을 허용해 주세요.";
+    if (stream) {
+      try { stream.getTracks().forEach((t) => t.stop()); } catch {}
     }
-    setStatus("카메라를 쓸 수 없어요: " + msg);
+    video.parentElement.hidden = true;
+    camBtn.disabled = false;
+    camBtn.textContent = "📷 카메라 켜기";
+
+    let title = "카메라를 켤 수 없습니다";
+    let body = "";
+
+    if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+      title = "카메라 장치를 찾을 수 없습니다";
+      body = `<p>현재 기기에 연결된 카메라(웹캠)가 없습니다.</p>` +
+             `<p>마우스로 톤암이나 LP판을 클릭하여 바로 재생하시거나, 웹캠이 있는 노트북이나 스마트폰에서 접속해 주세요.</p>`;
+    } else if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+      title = "카메라 권한이 차단되었습니다";
+      body = `<p>브라우저에서 카메라 권한이 차단되어 있습니다.</p>` +
+             `<p>주소창 왼쪽의 <strong>자물쇠 아이콘(또는 사이트 설정)</strong>을 눌러 카메라 권한을 <strong>'허용'</strong>으로 변경한 뒤 새로고침해 주세요.</p>`;
+    } else {
+      body = `<p>카메라 또는 AI 손 인식 모델 로딩 실패: <strong>${err.message}</strong></p>` +
+             `<p>마우스로도 LP판과 톤암의 모든 기능을 이용하실 수 있습니다.</p>`;
+    }
+
+    showModal(title, body);
+    setStatus("카메라를 쓸 수 없어요: " + (err.name === "NotFoundError" ? "웹캠 장치 없음 (마우스로 재생 가능)" : err.message));
   }
 };
 
@@ -356,7 +502,7 @@ function detectHand(now) {
   hand.thumb = t; hand.index = i; hand.visible = true; hand.last = now;
 }
 
-/* ───────── 마우스 (카메라 없이 테스트) ───────── */
+/* ───────── 마우스 / 터치 조작 (카메라 없이 테스트) ───────── */
 const toLocal = (e) => {
   const r = canvas.getBoundingClientRect();
   return { x: ((e.clientX - r.left) / r.width) * W, y: ((e.clientY - r.top) / r.height) * H };
@@ -368,14 +514,37 @@ canvas.addEventListener("pointerdown", (e) => {
 });
 canvas.addEventListener("pointermove", (e) => Object.assign(mouse, toLocal(e)));
 canvas.addEventListener("pointerup", (e) => {
+  const loc = toLocal(e);
+  const wasGrabbed = grabbed;
   mouse.down = false;
-  if (!hand.visible && grabbed) {
+
+  if (!hand.visible && wasGrabbed) {
     grabbed = false;
     if (onRecordAt(theta)) {
       onRecord = true;
       startPlayback(progressAt(theta));
     } else {
       setStatus("LP 위가 아니에요. 핀이 제자리로 돌아갑니다.");
+    }
+    updatePlayButton();
+  } else if (!hand.visible && !wasGrabbed) {
+    // LP판을 직접 클릭한 경우: 해당 위치로 톤암 이동 및 재생 시작
+    const r = Math.hypot(loc.x - C.x, loc.y - C.y);
+    if (r <= R) {
+      const p = progressForRadius(r);
+      theta = thetaForProgress(p);
+      onRecord = true;
+      startPlayback(p);
+      updatePlayButton();
+    } else {
+      // 톤암 핀 근처를 클릭한 경우: 정지 및 제자리 복귀
+      const n = needlePos(theta);
+      if (onRecord && Math.hypot(loc.x - n.x, loc.y - n.y) < GRAB_R) {
+        onRecord = false;
+        if (ytReady && player) player.pauseVideo();
+        setStatus("톤암을 제자리로 돌려놓았습니다.");
+        updatePlayButton();
+      }
     }
   }
 });
@@ -441,6 +610,7 @@ function update(dt, now) {
     if (!current) selectSong(songs[0]);
     if (onRecord) { onRecord = false; if (ytReady && player) player.pauseVideo(); }
     setStatus("핀을 잡았어요. 중심 쪽 끝까지 가서 놓으면 처음부터, 바깥쪽에 놓으면 그 위치부터 재생돼요.");
+    updatePlayButton();
   }
 
   // hand(카메라)로 놓았을 때의 처리 (마우스는 pointerup에서 즉시 처리)
@@ -448,6 +618,15 @@ function update(dt, now) {
     grabbed = false;
     if (onRecordAt(theta)) { onRecord = true; startPlayback(progressAt(theta)); }
     else setStatus("LP 위가 아니에요. 핀이 제자리로 돌아갑니다.");
+    updatePlayButton();
+  }
+
+  // 마우스 커서 동적 변경 (조작 가능한 영역 안내)
+  if (!hand.visible) {
+    if (grabbed) canvas.style.cursor = "grabbing";
+    else if (near) canvas.style.cursor = "grab";
+    else if (Math.hypot(inp.x - C.x, inp.y - C.y) <= R || boxAt(inp)) canvas.style.cursor = "pointer";
+    else canvas.style.cursor = "default";
   }
 
   // 브라우저 자동재생 차단 감지 (1.5초 이상 지났는데 아직 playing이 아닐 때 사용자 안내)
