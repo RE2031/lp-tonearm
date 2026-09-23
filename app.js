@@ -371,20 +371,6 @@ if (modalOverlay) {
 
 const isInApp = /KAKAOTALK|Instagram|NAVER|Line|FB_IAB|FB4A|FBAN/i.test(navigator.userAgent);
 
-// 페이지 로드 시 카메라 장치 사전 점검
-async function checkCameraDevice() {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
-  try {
-    const devs = await navigator.mediaDevices.enumerateDevices();
-    const hasCam = devs.some((d) => d.kind === "videoinput");
-    if (!hasCam && camBtn) {
-      camBtn.textContent = "📷 카메라 없음 (PC)";
-      camBtn.title = "현재 컴퓨터에 웹캠이 연결되어 있지 않습니다. (마우스로 조작 가능)";
-    }
-  } catch {}
-}
-checkCameraDevice();
-
 camBtn.onclick = async () => {
   unlockAudio();
 
@@ -401,37 +387,24 @@ camBtn.onclick = async () => {
     return;
   }
 
-  // 장치 목록 사전 확인
-  if (navigator.mediaDevices.enumerateDevices) {
-    try {
-      const devs = await navigator.mediaDevices.enumerateDevices();
-      const hasCam = devs.some((d) => d.kind === "videoinput");
-      if (!hasCam) {
-        showModal(
-          "📷 카메라(웹캠) 장치가 없습니다",
-          `<p>현재 사용 중인 컴퓨터에 <strong>연결된 카메라(웹캠)가 없습니다.</strong></p>` +
-          `<ul>` +
-            `<li><strong>마우스로 바로 즐기기:</strong> 화면의 톤암(핀)을 끌어다 놓거나 LP판을 클릭하면 즉시 음악이 재생됩니다.</li>` +
-            `<li><strong>손 제스처(카메라) 즐기기:</strong> 웹캠이 내장된 <strong>노트북</strong>이나 <strong>스마트폰/태블릿</strong>(Safari 또는 Chrome)에서 접속해 보세요.</li>` +
-          `</ul>`
-        );
-        setStatus("카메라 장치가 없습니다. 마우스로 LP판을 클릭하거나 톤암을 끌어보세요!");
-        return;
-      }
-    } catch {}
-  }
-
   camBtn.disabled = true;
-  camBtn.textContent = "카메라 연결 중…";
+  camBtn.textContent = "카메라 요청 중…";
 
   let stream = null;
   try {
+    // 3단계 호환성 폴백: 전면(user) -> 기본 해상도 -> 모든 비디오 장치
     try {
       stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }
       });
-    } catch (e) {
-      stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    } catch (e1) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 480 } }
+        });
+      } catch (e2) {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      }
     }
 
     video.parentElement.hidden = false;
@@ -464,20 +437,29 @@ camBtn.onclick = async () => {
     let body = "";
 
     if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
-      title = "카메라 장치를 찾을 수 없습니다";
-      body = `<p>현재 기기에 연결된 카메라(웹캠)가 없습니다.</p>` +
-             `<p>마우스로 톤암이나 LP판을 클릭하여 바로 재생하시거나, 웹캠이 있는 노트북이나 스마트폰에서 접속해 주세요.</p>`;
+      title = "카메라를 감지하지 못했습니다";
+      body = `<p>브라우저에서 사용 가능한 카메라(웹캠)를 찾을 수 없습니다.</p>` +
+             `<ul>` +
+             `<li><strong>카메라 연결:</strong> 외장 웹캠이 컴퓨터 USB 포트에 정상 연결되어 있는지 확인해 주세요.</li>` +
+             `<li><strong>Windows 카메라 권한:</strong> <strong>Windows 설정 > 개인 정보 및 보안 > 카메라</strong>에서 <strong>'앱의 카메라 액세스'</strong> 및 <strong>'데스크톱 앱의 카메라 액세스'</strong>가 [켬]으로 되어 있는지 확인해 주세요.</li>` +
+             `<li><strong>노트북/스마트폰:</strong> 카메라가 내장된 노트북이나 스마트폰에서 접속하시면 바로 손 제스처를 사용하실 수 있습니다.</li>` +
+             `</ul>` +
+             `<p>마우스나 터치로도 LP판이나 톤암을 클릭하여 즉시 음악을 들으실 수 있습니다.</p>`;
     } else if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
       title = "카메라 권한이 차단되었습니다";
       body = `<p>브라우저에서 카메라 권한이 차단되어 있습니다.</p>` +
-             `<p>주소창 왼쪽의 <strong>자물쇠 아이콘(또는 사이트 설정)</strong>을 눌러 카메라 권한을 <strong>'허용'</strong>으로 변경한 뒤 새로고침해 주세요.</p>`;
+             `<p>주소창 왼쪽의 <strong>자물쇠 아이콘(또는 사이트 설정)</strong>을 눌러 카메라 권한을 <strong>'허용'</strong>으로 변경한 뒤 페이지를 새로고침해 주세요.</p>`;
+    } else if (err.name === "NotReadableError" || err.name === "TrackStartError") {
+      title = "카메라가 다른 프로그램에서 사용 중입니다";
+      body = `<p>Zoom, Discord, OBS, 카카오톡 또는 기본 카메라 앱에서 카메라를 이미 사용하고 있을 수 있습니다.</p>` +
+             `<p>해당 프로그램을 완전히 종료한 후 다시 <strong>📷 카메라 켜기</strong>를 눌러주세요.</p>`;
     } else {
-      body = `<p>카메라 또는 AI 손 인식 모델 로딩 실패: <strong>${err.message}</strong></p>` +
-             `<p>마우스로도 LP판과 톤암의 모든 기능을 이용하실 수 있습니다.</p>`;
+      body = `<p>카메라 연결 중 오류가 발생했습니다: <strong>${err.name}: ${err.message}</strong></p>` +
+             `<p>마우스나 터치로도 LP판과 톤암을 자유롭게 조작하실 수 있습니다.</p>`;
     }
 
     showModal(title, body);
-    setStatus("카메라를 쓸 수 없어요: " + (err.name === "NotFoundError" ? "웹캠 장치 없음 (마우스로 재생 가능)" : err.message));
+    setStatus("카메라 오류: " + (err.name === "NotFoundError" ? "카메라 장치 인식 실패" : err.message));
   }
 };
 
